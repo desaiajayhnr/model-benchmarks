@@ -16,6 +16,7 @@ func init() {
 	var err error
 	templates, err = template.New("").Funcs(template.FuncMap{
 		"sub": func(a, b int) int { return a - b },
+		"div": func(a, b int) int { return a / b },
 	}).ParseFS(templateFS, "templates/*.yaml.tmpl")
 	if err != nil {
 		panic(fmt.Sprintf("parse manifest templates: %v", err))

@@ -91,7 +91,7 @@ func TestRenderModelDeployment_Neuron(t *testing.T) {
 	}{
 		{"neuron image", "vllm/vllm-neuron:v0.6.0"},
 		{"neuron toleration", "aws.amazon.com/neuron"},
-		{"neuron resource", `aws.amazon.com/neuron: "2"`},
+		{"neuron resource", `aws.amazon.com/neuron: "1"`}, // 2 NeuronCores / 2 = 1 Neuron device
 		{"instance type", "node.kubernetes.io/instance-type: inf2.xlarge"},
 	}
 

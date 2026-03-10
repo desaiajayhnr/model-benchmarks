@@ -79,9 +79,10 @@ spec:
             limits:
               nvidia.com/gpu: "{{ .AcceleratorCount }}"
 {{- else }}
-              aws.amazon.com/neuron: "{{ .AcceleratorCount }}"
+              {{- /* Neuron: accelerator_count is NeuronCores, but K8s resource is devices (cores/2) */}}
+              aws.amazon.com/neuron: "{{ div .AcceleratorCount 2 }}"
             limits:
-              aws.amazon.com/neuron: "{{ .AcceleratorCount }}"
+              aws.amazon.com/neuron: "{{ div .AcceleratorCount 2 }}"
 {{- end }}
           readinessProbe:
             httpGet:

@@ -71,7 +71,6 @@ export default function Run() {
     setRecommendation(null);
   }
 
-  const isNeuronInstance = /^(inf|trn)/.test(form.instance_type_name);
   const canSuggest =
     form.model_hf_id.trim() !== "" && form.instance_type_name !== "";
 
@@ -299,12 +298,6 @@ export default function Run() {
               "Suggest Config"
             )}
           </button>
-          {isNeuronInstance && canSuggest && (
-            <p className="mt-1 text-xs text-amber-600">
-              Configuration suggestions are not yet available for Neuron
-              instances.
-            </p>
-          )}
           {suggestError && (
             <p className="mt-1 text-sm text-red-600">{suggestError}</p>
           )}
