@@ -60,11 +60,11 @@ instance_types:
   - p5.48xlarge
   - p5e.48xlarge
 
-  # Neuron instances
-  - inf2.xlarge
-  - inf2.8xlarge
-  - inf2.24xlarge
-  - inf2.48xlarge
-  - trn1.2xlarge
-  - trn1.32xlarge
-  - trn2.48xlarge
+  # Neuron instances (disabled - compilation takes 30-60+ min and requires significant host RAM)
+  # - inf2.xlarge
+  # - inf2.8xlarge
+  # - inf2.24xlarge
+  # - inf2.48xlarge
+  # - trn1.2xlarge
+  # - trn1.32xlarge
+  # - trn2.48xlarge
