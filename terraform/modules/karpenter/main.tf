@@ -155,3 +155,178 @@ resource "kubectl_manifest" "neuron_node_pool" {
 
   depends_on = [helm_release.karpenter]
 }
+
+# ---------- NVIDIA Device Plugin ----------
+resource "kubectl_manifest" "nvidia_device_plugin" {
+  yaml_body = <<-YAML
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: nvidia-device-plugin-daemonset
+      namespace: kube-system
+    spec:
+      selector:
+        matchLabels:
+          name: nvidia-device-plugin-ds
+      updateStrategy:
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            name: nvidia-device-plugin-ds
+        spec:
+          priorityClassName: system-node-critical
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: karpenter.k8s.aws/instance-category
+                        operator: In
+                        values: ["g", "p"]
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+            - key: CriticalAddonsOnly
+              operator: Exists
+          containers:
+            - name: nvidia-device-plugin-ctr
+              image: nvcr.io/nvidia/k8s-device-plugin:v0.17.1
+              env:
+                - name: FAIL_ON_INIT_ERROR
+                  value: "false"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: device-plugin
+                  mountPath: /var/lib/kubelet/device-plugins
+          volumes:
+            - name: device-plugin
+              hostPath:
+                path: /var/lib/kubelet/device-plugins
+  YAML
+
+  depends_on = [helm_release.karpenter]
+}
+
+# ---------- Neuron Device Plugin ----------
+resource "kubectl_manifest" "neuron_device_plugin_sa" {
+  yaml_body = <<-YAML
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: neuron-device-plugin
+      namespace: kube-system
+  YAML
+
+  depends_on = [helm_release.karpenter]
+}
+
+resource "kubectl_manifest" "neuron_device_plugin_role" {
+  yaml_body = <<-YAML
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      name: neuron-device-plugin
+    rules:
+      - apiGroups: [""]
+        resources: ["nodes"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: [""]
+        resources: ["nodes/status"]
+        verbs: ["patch"]
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["get", "list", "watch"]
+  YAML
+
+  depends_on = [helm_release.karpenter]
+}
+
+resource "kubectl_manifest" "neuron_device_plugin_binding" {
+  yaml_body = <<-YAML
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      name: neuron-device-plugin
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: neuron-device-plugin
+    subjects:
+      - kind: ServiceAccount
+        name: neuron-device-plugin
+        namespace: kube-system
+  YAML
+
+  depends_on = [kubectl_manifest.neuron_device_plugin_role]
+}
+
+resource "kubectl_manifest" "neuron_device_plugin" {
+  yaml_body = <<-YAML
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: neuron-device-plugin-daemonset
+      namespace: kube-system
+    spec:
+      selector:
+        matchLabels:
+          name: neuron-device-plugin-ds
+      updateStrategy:
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            name: neuron-device-plugin-ds
+        spec:
+          priorityClassName: system-node-critical
+          serviceAccountName: neuron-device-plugin
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: karpenter.k8s.aws/instance-category
+                        operator: In
+                        values: ["inf", "trn"]
+          tolerations:
+            - key: aws.amazon.com/neuron
+              operator: Exists
+              effect: NoSchedule
+            - key: CriticalAddonsOnly
+              operator: Exists
+          containers:
+            - name: neuron-device-plugin
+              image: public.ecr.aws/neuron/neuron-device-plugin:2.22.4.0
+              imagePullPolicy: Always
+              env:
+                - name: KUBECONFIG
+                  value: /etc/kubernetes/kubelet.conf
+                - name: NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: device-plugin
+                  mountPath: /var/lib/kubelet/device-plugins
+                - name: infa-map
+                  mountPath: /run
+          volumes:
+            - name: device-plugin
+              hostPath:
+                path: /var/lib/kubelet/device-plugins
+            - name: infa-map
+              hostPath:
+                path: /run
+  YAML
+
+  depends_on = [kubectl_manifest.neuron_device_plugin_binding]
+}
