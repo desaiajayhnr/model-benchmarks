@@ -59,22 +59,34 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 		}
 	}
 
-	// Strategy 2: Look for end marker and find JSON by structure.
-	// Container runtimes may truncate long lines, corrupting the BEGIN marker,
-	// but the END marker on its own line typically survives.
+	// Strategy 2: Look for end marker and find JSON by brace matching.
+	// Container runtimes may truncate long lines, corrupting both the BEGIN
+	// marker and the opening brace. The END marker on its own line survives.
+	// Find the closing "}" before END and match braces backwards.
 	if endIdx := bytes.Index(data, endMarker); endIdx >= 0 {
-		// Search backwards from end marker for the start of JSON object
 		chunk := data[:endIdx]
-		// Look for {"requests": which is the start of our JSON structure
-		jsonStart := bytes.Index(chunk, []byte(`{"requests":`))
-		if jsonStart < 0 {
-			// Try with newline prefix (indented JSON)
-			jsonStart = bytes.Index(chunk, []byte("{\n  \"requests\":"))
-		}
-		if jsonStart >= 0 {
-			jsonData := bytes.TrimSpace(chunk[jsonStart:])
-			if err := json.Unmarshal(jsonData, &out); err == nil && len(out.Requests) > 0 {
-				return &out, nil
+		// Find the last '}' which closes our JSON object
+		closingBrace := bytes.LastIndexByte(chunk, '}')
+		if closingBrace >= 0 {
+			// Scan backwards counting braces to find matching '{'
+			depth := 1
+			jsonStart := -1
+			for i := closingBrace - 1; i >= 0 && depth > 0; i-- {
+				switch chunk[i] {
+				case '}':
+					depth++
+				case '{':
+					depth--
+					if depth == 0 {
+						jsonStart = i
+					}
+				}
+			}
+			if jsonStart >= 0 {
+				jsonData := bytes.TrimSpace(chunk[jsonStart : closingBrace+1])
+				if err := json.Unmarshal(jsonData, &out); err == nil && len(out.Requests) > 0 {
+					return &out, nil
+				}
 			}
 		}
 	}
