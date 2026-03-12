@@ -123,3 +123,9 @@ huggingface:
   token: ""
   existingSecret: ""
   existingSecretKey: "HF_TOKEN"
+
+# -- Benchmark results storage (S3)
+results:
+  # -- S3 bucket name for storing loadgen results (avoids log truncation)
+  # Set from Terraform output: accelbench-results-<account-id>
+  s3Bucket: ""

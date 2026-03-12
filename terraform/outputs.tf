@@ -47,3 +47,8 @@ output "ecr_loadgen_url" {
   description = "ECR repository URL for the loadgen image"
   value       = aws_ecr_repository.loadgen.repository_url
 }
+
+output "results_s3_bucket" {
+  description = "S3 bucket name for benchmark results"
+  value       = aws_s3_bucket.results.id
+}

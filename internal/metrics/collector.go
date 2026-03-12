@@ -29,24 +29,28 @@ type RequestResult struct {
 
 // Summary holds aggregate metrics from the load generator.
 type Summary struct {
-	TotalDurationSeconds     float64 `json:"total_duration_seconds"`
-	TotalRequests            int     `json:"total_requests"`
-	SuccessfulRequests       int     `json:"successful_requests"`
-	FailedRequests           int     `json:"failed_requests"`
-	ThroughputAggregateTPS   float64 `json:"throughput_aggregate_tps"`
-	RequestsPerSecond        float64 `json:"requests_per_second"`
+	TotalDurationSeconds      float64  `json:"total_duration_seconds"`
+	TotalRequests             int      `json:"total_requests"`
+	SuccessfulRequests        int      `json:"successful_requests"`
+	FailedRequests            int      `json:"failed_requests"`
+	ThroughputAggregateTPS    float64  `json:"throughput_aggregate_tps"`
+	RequestsPerSecond         float64  `json:"requests_per_second"`
 	AcceleratorUtilizationPct *float64 `json:"accelerator_utilization_pct,omitempty"`
-	AcceleratorMemoryPeakGiB *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+	AcceleratorMemoryPeakGiB  *float64 `json:"accelerator_memory_peak_gib,omitempty"`
 }
 
 // ParseLoadgenOutput parses the JSON output from a load generator pod.
-// Pod logs may contain non-JSON progress lines on stderr; this function
-// first looks for content between ACCELBENCH_JSON_BEGIN/END markers,
-// then falls back to scanning for JSON lines.
+// With S3 storage, the JSON is read directly from a file without truncation.
+// Falls back to log parsing for backward compatibility.
 func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 	var out LoadgenOutput
 
-	// Strategy 1: Look for marker-delimited JSON.
+	// Strategy 1: Try direct JSON unmarshal (S3 case - clean JSON)
+	if err := json.Unmarshal(data, &out); err == nil && len(out.Requests) > 0 {
+		return &out, nil
+	}
+
+	// Strategy 2: Look for marker-delimited JSON (log parsing fallback)
 	beginMarker := []byte("ACCELBENCH_JSON_BEGIN")
 	endMarker := []byte("ACCELBENCH_JSON_END")
 	if beginIdx := bytes.Index(data, beginMarker); beginIdx >= 0 {
@@ -59,57 +63,7 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 		}
 	}
 
-	// Strategy 2: Look for end marker and find JSON by structure.
-	// Container runtimes may truncate long lines, corrupting the BEGIN marker
-	// and potentially the opening '{'. The END marker on its own line typically survives.
-	// Search for '"requests":' which uniquely identifies our JSON payload.
-	if endIdx := bytes.Index(data, endMarker); endIdx >= 0 {
-		chunk := data[:endIdx]
-		// Find '"requests":' which marks the start of our JSON content
-		reqMarker := []byte(`"requests":`)
-		if reqIdx := bytes.Index(chunk, reqMarker); reqIdx >= 0 {
-			// Find the closing '}' - it's right before the END marker
-			closingBrace := bytes.LastIndexByte(chunk, '}')
-			if closingBrace > reqIdx {
-				// Search backwards from "requests" to find the opening '{'
-				jsonStart := -1
-				for i := reqIdx - 1; i >= 0; i-- {
-					if chunk[i] == '{' {
-						jsonStart = i
-						break
-					}
-					// Stop if we hit a non-whitespace character that isn't '{'
-					if chunk[i] != ' ' && chunk[i] != '\t' && chunk[i] != '\n' && chunk[i] != '\r' {
-						break
-					}
-				}
-
-				var jsonData []byte
-				if jsonStart >= 0 {
-					jsonData = chunk[jsonStart : closingBrace+1]
-				} else {
-					// Opening '{' was truncated - reconstruct it
-					// Find where "requests" line starts and prepend '{'
-					lineStart := reqIdx
-					for lineStart > 0 && chunk[lineStart-1] != '\n' {
-						lineStart--
-					}
-					jsonData = append([]byte("{"), chunk[lineStart:closingBrace+1]...)
-				}
-
-				if err := json.Unmarshal(jsonData, &out); err == nil && len(out.Requests) > 0 {
-					return &out, nil
-				}
-			}
-		}
-	}
-
-	// Strategy 3: Try the whole blob (fast path for clean output).
-	if err := json.Unmarshal(data, &out); err == nil {
-		return &out, nil
-	}
-
-	// Strategy 4: Scan line-by-line for a JSON payload.
+	// Strategy 3: Scan line-by-line for a JSON payload
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || line[0] != '{' {
@@ -119,7 +73,8 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 			return &out, nil
 		}
 	}
-	return nil, fmt.Errorf("parse loadgen output: no valid JSON payload found in %d bytes of log output", len(data))
+
+	return nil, fmt.Errorf("no valid JSON payload found in %d bytes of output", len(data))
 }
 
 // ComputeMetrics takes parsed loadgen output and computes the full set of
@@ -158,26 +113,26 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 	failCount := out.Summary.FailedRequests
 
 	return &database.BenchmarkMetrics{
-		TTFTP50Ms:                ttftP50,
-		TTFTP90Ms:                ttftP90,
-		TTFTP95Ms:                ttftP95,
-		TTFTP99Ms:                ttftP99,
-		E2ELatencyP50Ms:          e2eP50,
-		E2ELatencyP90Ms:          e2eP90,
-		E2ELatencyP95Ms:          e2eP95,
-		E2ELatencyP99Ms:          e2eP99,
-		ITLP50Ms:                 itlP50,
-		ITLP90Ms:                 itlP90,
-		ITLP95Ms:                 itlP95,
-		ITLP99Ms:                 itlP99,
-		ThroughputPerRequestTPS:  throughputPerRequest,
-		ThroughputAggregateTPS:   aggTPS,
-		RequestsPerSecond:        rps,
+		TTFTP50Ms:                 ttftP50,
+		TTFTP90Ms:                 ttftP90,
+		TTFTP95Ms:                 ttftP95,
+		TTFTP99Ms:                 ttftP99,
+		E2ELatencyP50Ms:           e2eP50,
+		E2ELatencyP90Ms:           e2eP90,
+		E2ELatencyP95Ms:           e2eP95,
+		E2ELatencyP99Ms:           e2eP99,
+		ITLP50Ms:                  itlP50,
+		ITLP90Ms:                  itlP90,
+		ITLP95Ms:                  itlP95,
+		ITLP99Ms:                  itlP99,
+		ThroughputPerRequestTPS:   throughputPerRequest,
+		ThroughputAggregateTPS:    aggTPS,
+		RequestsPerSecond:         rps,
 		AcceleratorUtilizationPct: out.Summary.AcceleratorUtilizationPct,
-		AcceleratorMemoryPeakGiB: out.Summary.AcceleratorMemoryPeakGiB,
-		SuccessfulRequests:       &successCount,
-		FailedRequests:           &failCount,
-		TotalDurationSeconds:     dur,
+		AcceleratorMemoryPeakGiB:  out.Summary.AcceleratorMemoryPeakGiB,
+		SuccessfulRequests:        &successCount,
+		FailedRequests:            &failCount,
+		TotalDurationSeconds:      dur,
 	}
 }
 

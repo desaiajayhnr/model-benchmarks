@@ -58,6 +58,8 @@ type LoadgenJobParams struct {
 	NumRequests          int
 	WarmupRequests       int
 	MinDurationSeconds   int
+	ResultsS3Bucket      string // S3 bucket for results upload
+	ResultsS3Key         string // S3 key for results file
 }
 
 // RenderModelDeployment renders the model Deployment + Service manifests.

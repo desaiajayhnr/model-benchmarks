@@ -17,6 +17,7 @@ spec:
         app.kubernetes.io/component: loadgen
         accelbench/role: loadgen
     spec:
+      serviceAccountName: accelbench-loadgen
       restartPolicy: Never
       affinity:
         nodeAffinity:
@@ -51,8 +52,12 @@ spec:
               value: "{{ .WarmupRequests }}"
             - name: MIN_DURATION_SECONDS
               value: "{{ .MinDurationSeconds }}"
-            - name: OUTPUT_FORMAT
-              value: "json"
+{{- if .ResultsS3Bucket }}
+            - name: RESULTS_S3_BUCKET
+              value: "{{ .ResultsS3Bucket }}"
+            - name: RESULTS_S3_KEY
+              value: "{{ .ResultsS3Key }}"
+{{- end }}
           resources:
             requests:
               cpu: "500m"

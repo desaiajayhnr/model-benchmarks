@@ -154,3 +154,89 @@ resource "aws_ecr_repository" "loadgen" {
   force_delete         = true
   tags                 = local.tags
 }
+
+# ---------- S3 Bucket for Benchmark Results ----------
+resource "aws_s3_bucket" "results" {
+  bucket        = "${var.project_name}-results-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+  tags          = local.tags
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "results" {
+  bucket = aws_s3_bucket.results.id
+
+  rule {
+    id     = "expire-old-results"
+    status = "Enabled"
+
+    expiration {
+      days = 30
+    }
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
+# Add S3 read access to API pod role
+resource "aws_iam_role_policy" "api_s3_read" {
+  name = "S3ResultsRead"
+  role = aws_iam_role.api_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ]
+      Resource = [
+        aws_s3_bucket.results.arn,
+        "${aws_s3_bucket.results.arn}/*"
+      ]
+    }]
+  })
+}
+
+# ---------- Loadgen Pod Identity (S3 write for results) ----------
+resource "aws_iam_role" "loadgen_pod" {
+  name = "${var.project_name}-loadgen"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "pods.eks.amazonaws.com"
+      }
+      Action = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "loadgen_s3_write" {
+  name = "S3ResultsWrite"
+  role = aws_iam_role.loadgen_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:PutObject"
+      ]
+      Resource = "${aws_s3_bucket.results.arn}/*"
+    }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "loadgen" {
+  cluster_name    = module.eks.cluster_name
+  namespace       = "accelbench"
+  service_account = "accelbench-loadgen"
+  role_arn        = aws_iam_role.loadgen_pod.arn
+
+  tags = local.tags
+}

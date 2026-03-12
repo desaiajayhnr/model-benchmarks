@@ -285,16 +285,25 @@ async def main():
         },
     }
 
-    # Print JSON to stdout with markers so the orchestrator can find it
-    # reliably even when K8s interleaves stdout and stderr.
-    # Use multi-line JSON to avoid container log line truncation (often 16KB limit)
-    # when output is large (e.g., 896 requests = 200KB+ on a single line).
-    sys.stdout.flush()
-    sys.stderr.flush()
-    print("ACCELBENCH_JSON_BEGIN")
-    print(json.dumps(output, indent=2))
-    print("ACCELBENCH_JSON_END")
-    sys.stdout.flush()
+    # Upload JSON to S3 to avoid container log truncation issues.
+    # The orchestrator will read from S3 instead of parsing pod logs.
+    s3_bucket = os.environ.get("RESULTS_S3_BUCKET")
+    s3_key = os.environ.get("RESULTS_S3_KEY")
+
+    if s3_bucket and s3_key:
+        import boto3
+        s3 = boto3.client("s3")
+        json_bytes = json.dumps(output).encode("utf-8")
+        s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=json_bytes, ContentType="application/json")
+        print(f"Results uploaded to s3://{s3_bucket}/{s3_key} ({len(json_bytes)} bytes)", file=sys.stderr)
+    else:
+        # Fallback: print to stdout with markers (may be truncated for large outputs)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        print("ACCELBENCH_JSON_BEGIN")
+        print(json.dumps(output, indent=2))
+        print("ACCELBENCH_JSON_END")
+        sys.stdout.flush()
 
     print(f"\n--- Summary ---", file=sys.stderr)
     print(f"Total: {len(results)} requests in {total_duration:.1f}s", file=sys.stderr)

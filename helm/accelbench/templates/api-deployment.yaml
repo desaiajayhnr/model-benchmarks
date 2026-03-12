@@ -49,6 +49,10 @@ spec:
             - name: HF_SECRET_NAME
               value: "{{ include "accelbench.hfSecretName" . }}"
             {{- end }}
+            {{- if .Values.results.s3Bucket }}
+            - name: RESULTS_S3_BUCKET
+              value: "{{ .Values.results.s3Bucket }}"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz

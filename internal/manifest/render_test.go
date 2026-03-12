@@ -175,8 +175,8 @@ func TestRenderLoadgenJob(t *testing.T) {
 		{"num requests", `value: "200"`},
 		{"warmup requests", `value: "10"`},
 		{"system node affinity", "accelbench/node-type"},
-		{"json output", `value: "json"`},
 		{"min duration env", "MIN_DURATION_SECONDS"},
+		{"service account", "serviceAccountName: accelbench-loadgen"},
 		{"backoff limit", "backoffLimit: 0"},
 	}
 

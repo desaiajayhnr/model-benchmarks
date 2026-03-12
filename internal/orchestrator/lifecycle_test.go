@@ -172,7 +172,7 @@ func TestWaitAndCollect_JobFailed(t *testing.T) {
 	})
 	client.BatchV1().Jobs("default").UpdateStatus(ctx, job, metav1.UpdateOptions{})
 
-	_, err := o.waitAndCollect(ctx, "default", "loadgen-12345678")
+	_, err := o.waitAndCollect(ctx, "default", "loadgen-12345678", "12345678-test-run-id")
 	if err == nil {
 		t.Fatal("expected error for failed job")
 	}

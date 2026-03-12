@@ -16,6 +16,9 @@ import (
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -131,7 +134,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 
 	// Phase 5: Wait for Job completion and collect results.
 	log.Printf("[%s] waiting for load generator completion", cfg.RunID[:8])
-	logData, err := o.waitAndCollect(ctx, ns, loadgenName)
+	logData, err := o.waitAndCollect(ctx, ns, loadgenName, cfg.RunID)
 
 	// Stop GPU scraper and collect metrics (before checking loadgen error).
 	var gpuMetrics *GPUMetrics
@@ -253,6 +256,13 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		loadgenImage = "ghcr.io/accelbench/loadgen:latest"
 	}
 
+	// Use S3 for results to avoid container log truncation
+	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
+	resultsKey := ""
+	if resultsBucket != "" {
+		resultsKey = fmt.Sprintf("results/%s.json", cfg.RunID)
+	}
+
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
 		Name:                 name,
 		Namespace:            ns,
@@ -267,6 +277,8 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		NumRequests:          numRequests,
 		WarmupRequests:       10,
 		MinDurationSeconds:   cfg.Request.MinDurationSeconds,
+		ResultsS3Bucket:      resultsBucket,
+		ResultsS3Key:         resultsKey,
 	})
 	if err != nil {
 		return err
@@ -275,7 +287,7 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 	return o.applyYAML(ctx, ns, yamlStr)
 }
 
-func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName string) ([]byte, error) {
+func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName, runID string) ([]byte, error) {
 	deadline := time.Now().Add(jobTimeout)
 	for time.Now().Before(deadline) {
 		job, err := o.client.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
@@ -284,6 +296,15 @@ func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName string) (
 		}
 		for _, cond := range job.Status.Conditions {
 			if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+				// Try S3 first, fall back to logs
+				if bucket := os.Getenv("RESULTS_S3_BUCKET"); bucket != "" {
+					key := fmt.Sprintf("results/%s.json", runID)
+					data, err := o.readResultsFromS3(ctx, bucket, key)
+					if err == nil {
+						return data, nil
+					}
+					log.Printf("[%s] S3 read failed, falling back to logs: %v", runID[:8], err)
+				}
 				return o.readJobLogs(ctx, ns, jobName)
 			}
 			if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
@@ -297,6 +318,25 @@ func (o *Orchestrator) waitAndCollect(ctx context.Context, ns, jobName string) (
 		}
 	}
 	return nil, fmt.Errorf("loadgen job %s timed out after %v", jobName, jobTimeout)
+}
+
+func (o *Orchestrator) readResultsFromS3(ctx context.Context, bucket, key string) ([]byte, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
+
+	client := s3.NewFromConfig(cfg)
+	result, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get S3 object: %w", err)
+	}
+	defer result.Body.Close()
+
+	return io.ReadAll(result.Body)
 }
 
 func (o *Orchestrator) readJobLogs(ctx context.Context, ns, jobName string) ([]byte, error) {
