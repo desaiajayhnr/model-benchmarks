@@ -18,6 +18,8 @@ export default function Run() {
     useState<RecommendResponse | null>(null);
   const [suggestError, setSuggestError] = useState("");
   const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
+  const [validTPOptions, setValidTPOptions] = useState<number[]>([]);
+  const [recalculating, setRecalculating] = useState(false);
 
   useEffect(() => {
     listInstanceTypes().then(setInstanceTypes).catch(() => {});
@@ -78,6 +80,7 @@ export default function Run() {
     setSuggestError("");
     setSuggesting(true);
     setRecommendation(null);
+    setValidTPOptions([]);
     try {
       const rec = await getRecommendation(
         form.model_hf_id,
@@ -85,6 +88,7 @@ export default function Run() {
         form.hf_token || undefined
       );
       setRecommendation(rec);
+      setValidTPOptions(rec.valid_tp_options ?? []);
 
       if (rec.explanation.feasible) {
         setForm((prev) => ({
@@ -103,6 +107,34 @@ export default function Run() {
       );
     } finally {
       setSuggesting(false);
+    }
+  }
+
+  // Recalculate recommendation when TP is changed by user
+  async function handleTPChange(newTP: number) {
+    set("tensor_parallel_degree", newTP);
+    if (!recommendation || !recommendation.explanation.feasible) return;
+
+    setRecalculating(true);
+    try {
+      const rec = await getRecommendation(
+        form.model_hf_id,
+        form.instance_type_name,
+        form.hf_token || undefined,
+        newTP
+      );
+      setRecommendation(rec);
+      if (rec.explanation.feasible) {
+        setForm((prev) => ({
+          ...prev,
+          max_model_len: rec.max_model_len,
+          concurrency: rec.concurrency,
+        }));
+      }
+    } catch {
+      // Silently fail - user can still proceed with manual values
+    } finally {
+      setRecalculating(false);
     }
   }
 
@@ -389,17 +421,34 @@ export default function Run() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Tensor Parallel
+              {recalculating && (
+                <span className="ml-2 text-xs text-gray-400">(updating...)</span>
+              )}
             </label>
-            <input
-              type="number"
-              min={1}
-              max={64}
-              value={form.tensor_parallel_degree}
-              onChange={(e) =>
-                set("tensor_parallel_degree", Number(e.target.value))
-              }
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-            />
+            {validTPOptions.length > 0 ? (
+              <select
+                value={form.tensor_parallel_degree}
+                onChange={(e) => handleTPChange(Number(e.target.value))}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              >
+                {validTPOptions.map((tp) => (
+                  <option key={tp} value={tp}>
+                    {tp}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="number"
+                min={1}
+                max={64}
+                value={form.tensor_parallel_degree}
+                onChange={(e) =>
+                  set("tensor_parallel_degree", Number(e.target.value))
+                }
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

@@ -168,6 +168,7 @@ export interface RecommendResponse {
   model_info: RecommendModelInfo;
   instance_info: RecommendInstanceInfo;
   alternatives?: RecommendAlternatives;
+  valid_tp_options?: number[];
 }
 
 export interface InstanceType {

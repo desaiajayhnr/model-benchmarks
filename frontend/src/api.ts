@@ -94,9 +94,11 @@ export async function listPricing(region?: string): Promise<PricingRow[]> {
 export async function getRecommendation(
   model: string,
   instanceType: string,
-  hfToken?: string
+  hfToken?: string,
+  tp?: number
 ): Promise<RecommendResponse> {
   const params = new URLSearchParams({ model, instance_type: instanceType });
+  if (tp !== undefined && tp > 0) params.set("tp", String(tp));
   const headers: Record<string, string> = {};
   if (hfToken) headers["X-HF-Token"] = hfToken;
   return fetchJSON<RecommendResponse>(`${BASE}/recommend?${params}`, { headers });
