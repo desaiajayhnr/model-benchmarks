@@ -287,10 +287,12 @@ async def main():
 
     # Print JSON to stdout with markers so the orchestrator can find it
     # reliably even when K8s interleaves stdout and stderr.
+    # Use multi-line JSON to avoid container log line truncation (often 16KB limit)
+    # when output is large (e.g., 896 requests = 200KB+ on a single line).
     sys.stdout.flush()
     sys.stderr.flush()
     print("ACCELBENCH_JSON_BEGIN")
-    print(json.dumps(output))
+    print(json.dumps(output, indent=2))
     print("ACCELBENCH_JSON_END")
     sys.stdout.flush()
 
