@@ -64,6 +64,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/instance-types", s.handleListInstanceTypes)
 	mux.HandleFunc("GET /api/v1/pricing", s.handleListPricing)
 	mux.HandleFunc("GET /api/v1/recommend", s.handleRecommend)
+	mux.HandleFunc("GET /api/v1/estimate", s.handleEstimate)
 	mux.HandleFunc("POST /api/v1/catalog/seed", s.handleCatalogSeed)
 	mux.HandleFunc("GET /api/v1/catalog/seed", s.handleCatalogSeedStatus)
 }

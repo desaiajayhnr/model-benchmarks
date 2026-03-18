@@ -46,6 +46,12 @@ spec:
           env:
             - name: HF_TOKEN
               value: "{{ .HfToken }}"
+{{- if and (eq .AcceleratorType "gpu") (gt .TensorParallelDegree 1) }}
+            - name: NCCL_DEBUG
+              value: "INFO"
+            - name: NCCL_P2P_LEVEL
+              value: "NVL"
+{{- end }}
 {{- if eq .AcceleratorType "gpu" }}
           args:
             - "--model"

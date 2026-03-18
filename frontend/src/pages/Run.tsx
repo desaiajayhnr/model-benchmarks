@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { createRun, getRecommendation, listInstanceTypes } from "../api";
 import type { InstanceType, RecommendResponse } from "../types";
 import { validateToken } from "../hfApi";
@@ -10,6 +10,7 @@ type TokenStatus = "idle" | "validating" | "valid" | "invalid";
 
 export default function Run() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [tokenStatus, setTokenStatus] = useState<TokenStatus>("idle");
@@ -25,21 +26,26 @@ export default function Run() {
     listInstanceTypes().then(setInstanceTypes).catch(() => {});
   }, []);
 
-  const [form, setForm] = useState({
-    model_hf_id: "",
-    model_hf_revision: "main",
-    instance_type_name: "",
-    framework: "vllm",
-    framework_version: "v0.6.6",
-    tensor_parallel_degree: 1,
-    quantization: "",
-    concurrency: 16,
-    input_sequence_length: 512,
-    output_sequence_length: 256,
-    dataset_name: "sharegpt",
-    max_model_len: 0,
-    min_duration_seconds: 180,
-    hf_token: "",
+  // Initialize form with URL params (from Estimate page) or defaults
+  const [form, setForm] = useState(() => {
+    const instance = searchParams.get("instance") || "";
+    const isNeuron = /^(inf|trn)/.test(instance);
+    return {
+      model_hf_id: searchParams.get("model") || "",
+      model_hf_revision: "main",
+      instance_type_name: instance,
+      framework: isNeuron ? "vllm-neuron" : "vllm",
+      framework_version: "v0.6.6",
+      tensor_parallel_degree: Number(searchParams.get("tp")) || 1,
+      quantization: searchParams.get("quantization") || "",
+      concurrency: Number(searchParams.get("concurrency")) || 16,
+      input_sequence_length: Number(searchParams.get("input_seq")) || 512,
+      output_sequence_length: Number(searchParams.get("output_seq")) || 256,
+      dataset_name: "sharegpt",
+      max_model_len: Number(searchParams.get("max_model_len")) || 0,
+      min_duration_seconds: 180,
+      hf_token: "",
+    };
   });
 
   function set(key: string, value: string | number) {

@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 const navItems = [
   { to: "/", label: "Catalog" },
   { to: "/compare", label: "Compare" },
+  { to: "/estimate", label: "Estimate" },
   { to: "/run", label: "Run Benchmark" },
   { to: "/jobs", label: "Jobs" },
 ];

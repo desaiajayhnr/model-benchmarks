@@ -10,6 +10,8 @@ import type {
   RunListFilter,
   PricingRow,
   RecommendResponse,
+  EstimateFilter,
+  EstimateResponse,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -118,4 +120,22 @@ export async function cancelRun(id: string): Promise<void> {
 
 export async function deleteRun(id: string): Promise<void> {
   await fetch(`${BASE}/runs/${id}`, { method: "DELETE" });
+}
+
+export async function getEstimate(
+  model: string,
+  filter: EstimateFilter = {},
+  hfToken?: string
+): Promise<EstimateResponse> {
+  const params = new URLSearchParams({ model });
+  if (filter.accelerator_type) params.set("accelerator_type", filter.accelerator_type);
+  if (filter.max_cost_hourly) params.set("max_cost_hourly", String(filter.max_cost_hourly));
+  if (filter.min_context_length) params.set("min_context_length", String(filter.min_context_length));
+  if (filter.quantization) params.set("quantization", filter.quantization);
+  if (filter.region) params.set("region", filter.region);
+
+  const headers: Record<string, string> = {};
+  if (hfToken) headers["X-HF-Token"] = hfToken;
+
+  return fetchJSON<EstimateResponse>(`${BASE}/estimate?${params}`, { headers });
 }

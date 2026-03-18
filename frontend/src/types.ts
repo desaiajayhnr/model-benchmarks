@@ -200,3 +200,70 @@ export interface CatalogFilter {
   limit?: number;
   offset?: number;
 }
+
+// Estimate types
+export interface EstimateFilter {
+  accelerator_type?: string;
+  max_cost_hourly?: number;
+  min_context_length?: number;
+  quantization?: string;
+  region?: string;
+}
+
+export interface EstimateConfig {
+  tensor_parallel_degree: number;
+  quantization?: string | null;
+  max_model_len: number;
+  concurrency: number;
+  input_sequence_length: number;
+  output_sequence_length: number;
+}
+
+export interface MemoryEstimate {
+  model_weights_gib: number;
+  available_gib: number;
+  utilization_pct: number;
+}
+
+export interface CostEstimate {
+  hourly_usd: number;
+}
+
+export interface EstimateRow {
+  instance_type: string;
+  accelerator_type: string;
+  accelerator_name: string;
+  accelerator_count: number;
+  feasible: boolean;
+  requires_quantization: boolean;
+  config?: EstimateConfig;
+  memory?: MemoryEstimate;
+  cost?: CostEstimate;
+  explanation?: string;
+  has_benchmark_data: boolean;
+}
+
+export interface EstimateModelInfo {
+  hf_id: string;
+  parameter_count: number;
+  native_dtype: string;
+  max_position_embeddings: number;
+  architecture: string;
+  num_attention_heads: number;
+  num_kv_heads: number;
+}
+
+export interface EstimateSummary {
+  total_evaluated: number;
+  feasible_native: number;
+  feasible_quantized: number;
+  infeasible: number;
+  cheapest_feasible?: string;
+  most_headroom?: string;
+}
+
+export interface EstimateResponse {
+  model_info: EstimateModelInfo;
+  estimates: EstimateRow[];
+  summary: EstimateSummary;
+}
