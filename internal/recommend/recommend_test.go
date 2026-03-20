@@ -1,6 +1,7 @@
 package recommend
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -240,37 +241,36 @@ func TestRecommendLlama70B_G5_48xlarge_NeedsQuantization(t *testing.T) {
 	}
 }
 
-func TestRecommendAlternatives_ShowsBothOptions(t *testing.T) {
-	// Create a model that doesn't fit at BF16 but fits at INT8.
-	// ~30B params = 60 GiB BF16, 30 GiB INT8.
+func TestRecommendAlternatives_ShowsFP8Option(t *testing.T) {
+	// Create a model that doesn't fit at BF16 but fits at FP8.
+	// ~70B params = 140 GiB BF16, 70 GiB FP8.
+	// Only FP8 can be applied at runtime (INT8/INT4 require pre-quantized models).
 	model := ModelConfig{
-		ParameterCount:        30_000_000_000,
+		ParameterCount:        70_000_000_000,
 		HiddenSize:            8192,
 		NumAttentionHeads:     64,
 		NumKeyValueHeads:      8,
-		NumHiddenLayers:       60,
+		NumHiddenLayers:       80,
 		MaxPositionEmbeddings: 8192,
 		TorchDtype:            "bfloat16",
 		ModelType:             "llama",
 	}
-	// g5.xlarge: 24 GiB — BF16 doesn't fit, INT8 doesn't fit either (30 > 21.6).
-	// g5.12xlarge: 96 GiB — BF16 doesn't fit (60 > 86.4... actually 60 < 86.4, it fits).
-	// Let's use 2-GPU instance: 48 GiB total, 43.2 usable. BF16 60 > 43.2, INT8 30 < 43.2.
+	// 1x H100: 80 GiB total, 72 GiB usable. BF16 140 > 72, FP8 70 < 72.
 	inst := InstanceSpec{
-		Name: "custom.2xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G",
-		AcceleratorCount: 2, AcceleratorMemoryGiB: 48,
+		Name: "custom.h100", AcceleratorType: "GPU", AcceleratorName: "H100",
+		AcceleratorCount: 1, AcceleratorMemoryGiB: 80,
 	}
 
 	rec := Recommend(model, inst, allInstances, RecommendOptions{})
 
 	if !rec.Explanation.Feasible {
-		t.Fatalf("expected feasible with quantization: %s", rec.Explanation.Reason)
+		t.Fatalf("expected feasible with FP8 quantization: %s", rec.Explanation.Reason)
 	}
 	if rec.Quantization == nil {
 		t.Fatal("expected quantization to be recommended")
 	}
-	if *rec.Quantization != "int8" {
-		t.Errorf("quantization = %s, want int8", *rec.Quantization)
+	if *rec.Quantization != "fp8" {
+		t.Errorf("quantization = %s, want fp8", *rec.Quantization)
 	}
 	if rec.Alternatives == nil {
 		t.Fatal("expected alternatives to be set")
@@ -278,8 +278,38 @@ func TestRecommendAlternatives_ShowsBothOptions(t *testing.T) {
 	if rec.Alternatives.QuantizationOption == nil {
 		t.Error("expected quantization option in alternatives")
 	}
-	if rec.Alternatives.LargerInstance == "" {
-		t.Error("expected larger instance suggestion in alternatives")
+}
+
+func TestRecommendInfeasible_SuggestsPreQuantized(t *testing.T) {
+	// Model that doesn't fit at native precision on non-FP8 hardware.
+	// Should suggest using a larger instance or pre-quantized model.
+	model := ModelConfig{
+		ParameterCount:        70_000_000_000,
+		HiddenSize:            8192,
+		NumAttentionHeads:     64,
+		NumKeyValueHeads:      8,
+		NumHiddenLayers:       80,
+		MaxPositionEmbeddings: 8192,
+		TorchDtype:            "bfloat16",
+		ModelType:             "llama",
+	}
+	// A10G doesn't support FP8, so this should be infeasible
+	inst := InstanceSpec{
+		Name: "g5.12xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G",
+		AcceleratorCount: 4, AcceleratorMemoryGiB: 96,
+	}
+
+	rec := Recommend(model, inst, allInstances, RecommendOptions{})
+
+	if rec.Explanation.Feasible {
+		t.Fatal("expected infeasible - A10G doesn't support FP8")
+	}
+	if rec.Explanation.Reason == "" {
+		t.Error("expected a reason for infeasibility")
+	}
+	// Should mention pre-quantized models since FP8 isn't available
+	if !strings.Contains(rec.Explanation.Reason, "pre-quantized") {
+		t.Errorf("expected reason to mention pre-quantized models, got: %s", rec.Explanation.Reason)
 	}
 }
 

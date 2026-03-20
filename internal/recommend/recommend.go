@@ -295,30 +295,18 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		// Doesn't fit at native precision — try quantization options.
 		rec.Alternatives = &Alternatives{}
 
-		// Try quantization levels in order of preference.
-		quantOptions := []struct {
-			name string
-			ok   bool
-		}{
-			{"fp8", supportsFP8(inst.AcceleratorName)},
-			{"int8", true},
-			{"int4", true},
-		}
-
+		// Only FP8 can be applied at runtime. INT8/INT4 require pre-quantized models
+		// (GPTQ, AWQ, etc.) which we can't automatically recommend.
 		var fitsWithQuant bool
-		for _, qo := range quantOptions {
-			if !qo.ok {
-				continue
-			}
-			qMem := modelMemoryBytes(cfg.ParameterCount, qo.name)
-			if qMem <= totalUsableBytes {
-				chosenQuant = qo.name
+		if supportsFP8(inst.AcceleratorName) {
+			fp8Mem := modelMemoryBytes(cfg.ParameterCount, "fp8")
+			if fp8Mem <= totalUsableBytes {
+				chosenQuant = "fp8"
 				fitsWithQuant = true
 				rec.Alternatives.QuantizationOption = &QuantizationOption{
-					Quantization:    qo.name,
-					EstimatedMemGiB: qMem / gibBytes,
+					Quantization:    "fp8",
+					EstimatedMemGiB: fp8Mem / gibBytes,
 				}
-				break
 			}
 		}
 
@@ -353,9 +341,14 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		} else {
 			// Nothing fits — infeasible on this instance.
 			rec.Explanation.Feasible = false
-			rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s. Even INT4 (%.1f GiB) exceeds %.0f GiB available on %s.",
-				modelMemNative/gibBytes, dtype, modelMemoryBytes(cfg.ParameterCount, "int4")/gibBytes,
-				totalUsableBytes/gibBytes, inst.Name)
+			if supportsFP8(inst.AcceleratorName) {
+				rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s. Even FP8 (%.1f GiB) exceeds %.0f GiB available on %s.",
+					modelMemNative/gibBytes, dtype, modelMemoryBytes(cfg.ParameterCount, "fp8")/gibBytes,
+					totalUsableBytes/gibBytes, inst.Name)
+			} else {
+				rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available on %s. Use a larger instance or a pre-quantized model (GPTQ/AWQ).",
+					modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, inst.Name)
+			}
 			if rec.Alternatives.LargerInstance != "" {
 				rec.Explanation.SuggestedInstance = rec.Alternatives.LargerInstance
 			}
