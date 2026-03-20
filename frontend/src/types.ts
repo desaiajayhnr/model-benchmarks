@@ -164,6 +164,7 @@ export interface RecommendResponse {
   concurrency: number;
   input_sequence_length: number;
   output_sequence_length: number;
+  overhead_gib: number;
   explanation: RecommendExplanation;
   model_info: RecommendModelInfo;
   instance_info: RecommendInstanceInfo;

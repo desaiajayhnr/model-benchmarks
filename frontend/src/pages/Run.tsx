@@ -45,6 +45,7 @@ export default function Run() {
       max_model_len: Number(searchParams.get("max_model_len")) || 0,
       min_duration_seconds: 180,
       hf_token: searchParams.get("hf_token") || "",
+      overhead_gib: 0, // 0 = auto-calculated
     };
   });
 
@@ -105,6 +106,7 @@ export default function Run() {
           concurrency: rec.concurrency,
           input_sequence_length: rec.input_sequence_length,
           output_sequence_length: rec.output_sequence_length,
+          overhead_gib: rec.overhead_gib,
         }));
       }
     } catch (err) {
@@ -127,7 +129,8 @@ export default function Run() {
         form.model_hf_id,
         form.instance_type_name,
         form.hf_token || undefined,
-        newTP
+        newTP,
+        form.overhead_gib || undefined
       );
       setRecommendation(rec);
       if (rec.explanation.feasible) {
@@ -135,6 +138,36 @@ export default function Run() {
           ...prev,
           max_model_len: rec.max_model_len,
           concurrency: rec.concurrency,
+        }));
+      }
+    } catch {
+      // Silently fail - user can still proceed with manual values
+    } finally {
+      setRecalculating(false);
+    }
+  }
+
+  // Recalculate recommendation when overhead is changed by user
+  async function handleOverheadChange(newOverhead: number) {
+    set("overhead_gib", newOverhead);
+    if (!recommendation || !recommendation.explanation.feasible) return;
+
+    setRecalculating(true);
+    try {
+      const rec = await getRecommendation(
+        form.model_hf_id,
+        form.instance_type_name,
+        form.hf_token || undefined,
+        form.tensor_parallel_degree,
+        newOverhead || undefined
+      );
+      setRecommendation(rec);
+      if (rec.explanation.feasible) {
+        setForm((prev) => ({
+          ...prev,
+          max_model_len: rec.max_model_len,
+          concurrency: rec.concurrency,
+          overhead_gib: rec.overhead_gib,
         }));
       }
     } catch {
@@ -375,6 +408,10 @@ export default function Run() {
                 Concurrency = {recommendation.concurrency} —{" "}
                 {recommendation.explanation.concurrency}
               </li>
+              <li>
+                Runtime Overhead = {recommendation.overhead_gib.toFixed(2)} GiB —{" "}
+                Estimated CUDA context, graphs, and fragmentation
+              </li>
             </ul>
           </div>
         )}
@@ -498,6 +535,35 @@ export default function Run() {
             />
           </div>
         </div>
+
+        {/* Advanced: Runtime Overhead */}
+        {recommendation && recommendation.explanation.feasible && (
+          <div className="border-t border-gray-200 pt-4">
+            <div className="flex items-center gap-4">
+              <div className="w-48">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Runtime Overhead (GiB)
+                  {recalculating && (
+                    <span className="ml-2 text-xs text-gray-400">(updating...)</span>
+                  )}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={form.overhead_gib || ""}
+                  onChange={(e) => handleOverheadChange(Number(e.target.value))}
+                  placeholder="auto"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-5">
+                Increase if model fails with OOM. Qwen/Mistral often need 4-5 GiB.
+                Changing this recalculates max_model_len and concurrency.
+              </p>
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">

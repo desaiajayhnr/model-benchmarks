@@ -97,10 +97,12 @@ export async function getRecommendation(
   model: string,
   instanceType: string,
   hfToken?: string,
-  tp?: number
+  tp?: number,
+  overheadGiB?: number
 ): Promise<RecommendResponse> {
   const params = new URLSearchParams({ model, instance_type: instanceType });
   if (tp !== undefined && tp > 0) params.set("tp", String(tp));
+  if (overheadGiB !== undefined && overheadGiB > 0) params.set("overhead_gib", String(overheadGiB));
   const headers: Record<string, string> = {};
   if (hfToken) headers["X-HF-Token"] = hfToken;
   return fetchJSON<RecommendResponse>(`${BASE}/recommend?${params}`, { headers });
