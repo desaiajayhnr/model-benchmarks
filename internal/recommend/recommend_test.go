@@ -280,9 +280,9 @@ func TestRecommendAlternatives_ShowsFP8Option(t *testing.T) {
 	}
 }
 
-func TestRecommendInfeasible_SuggestsPreQuantized(t *testing.T) {
+func TestRecommendWithPreQuantized(t *testing.T) {
 	// Model that doesn't fit at native precision on non-FP8 hardware.
-	// Should suggest using a larger instance or pre-quantized model.
+	// Should be feasible with INT8 but require a pre-quantized model.
 	model := ModelConfig{
 		ParameterCount:        70_000_000_000,
 		HiddenSize:            8192,
@@ -293,7 +293,7 @@ func TestRecommendInfeasible_SuggestsPreQuantized(t *testing.T) {
 		TorchDtype:            "bfloat16",
 		ModelType:             "llama",
 	}
-	// A10G doesn't support FP8, so this should be infeasible
+	// A10G doesn't support FP8, but INT8 (70 GiB) fits in 96 GiB
 	inst := InstanceSpec{
 		Name: "g5.12xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G",
 		AcceleratorCount: 4, AcceleratorMemoryGiB: 96,
@@ -301,15 +301,21 @@ func TestRecommendInfeasible_SuggestsPreQuantized(t *testing.T) {
 
 	rec := Recommend(model, inst, allInstances, RecommendOptions{})
 
-	if rec.Explanation.Feasible {
-		t.Fatal("expected infeasible - A10G doesn't support FP8")
+	if !rec.Explanation.Feasible {
+		t.Fatalf("expected feasible with INT8: %s", rec.Explanation.Reason)
 	}
-	if rec.Explanation.Reason == "" {
-		t.Error("expected a reason for infeasibility")
+	if rec.Quantization == nil || *rec.Quantization != "int8" {
+		t.Errorf("expected int8 quantization, got %v", rec.Quantization)
 	}
-	// Should mention GPTQ/AWQ since FP8 isn't available
-	if !strings.Contains(rec.Explanation.Reason, "GPTQ or AWQ") {
-		t.Errorf("expected reason to mention GPTQ or AWQ, got: %s", rec.Explanation.Reason)
+	if rec.Alternatives == nil || rec.Alternatives.QuantizationOption == nil {
+		t.Fatal("expected alternatives with quantization option")
+	}
+	if !rec.Alternatives.QuantizationOption.RequiresPreQuantized {
+		t.Error("expected RequiresPreQuantized=true for INT8 on A10G")
+	}
+	// Explanation should mention pre-quantized model requirement
+	if !strings.Contains(rec.Explanation.Quantization, "pre-quantized") {
+		t.Errorf("expected explanation to mention pre-quantized, got: %s", rec.Explanation.Quantization)
 	}
 }
 

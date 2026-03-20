@@ -85,8 +85,9 @@ type Alternatives struct {
 
 // QuantizationOption describes a quantization configuration that makes the model fit.
 type QuantizationOption struct {
-	Quantization    string  `json:"quantization"`
-	EstimatedMemGiB float64 `json:"estimated_mem_gib"`
+	Quantization        string  `json:"quantization"`
+	EstimatedMemGiB     float64 `json:"estimated_mem_gib"`
+	RequiresPreQuantized bool   `json:"requires_pre_quantized"` // True if a pre-quantized model (GPTQ/AWQ) is needed
 }
 
 const (
@@ -295,17 +296,41 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		// Doesn't fit at native precision — try quantization options.
 		rec.Alternatives = &Alternatives{}
 
-		// Only FP8 can be applied at runtime. INT8/INT4 require pre-quantized models
-		// (GPTQ, AWQ, etc.) which we can't automatically recommend.
+		// Try quantization levels in order of preference.
+		// FP8: Runtime only - requires hardware support (H100/H200/L40S), skip if not available
+		// INT8/INT4: Require pre-quantized models (GPTQ/AWQ) but work on any hardware
 		var fitsWithQuant bool
+		var requiresPreQuantized bool
+
+		// First try FP8 if hardware supports it
 		if supportsFP8(inst.AcceleratorName) {
 			fp8Mem := modelMemoryBytes(cfg.ParameterCount, "fp8")
 			if fp8Mem <= totalUsableBytes {
 				chosenQuant = "fp8"
 				fitsWithQuant = true
+				requiresPreQuantized = false
 				rec.Alternatives.QuantizationOption = &QuantizationOption{
-					Quantization:    "fp8",
-					EstimatedMemGiB: fp8Mem / gibBytes,
+					Quantization:         "fp8",
+					EstimatedMemGiB:      fp8Mem / gibBytes,
+					RequiresPreQuantized: false,
+				}
+			}
+		}
+
+		// If FP8 didn't work, try INT8/INT4 (require pre-quantized models)
+		if !fitsWithQuant {
+			for _, qName := range []string{"int8", "int4"} {
+				qMem := modelMemoryBytes(cfg.ParameterCount, qName)
+				if qMem <= totalUsableBytes {
+					chosenQuant = qName
+					fitsWithQuant = true
+					requiresPreQuantized = true
+					rec.Alternatives.QuantizationOption = &QuantizationOption{
+						Quantization:         qName,
+						EstimatedMemGiB:      qMem / gibBytes,
+						RequiresPreQuantized: true,
+					}
+					break
 				}
 			}
 		}
@@ -334,8 +359,13 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			}
 			tp := validTPDegree(minGPUsQ, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)
 			rec.TensorParallelDegree = tp
-			rec.Explanation.Quantization = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available. Using %s quantization (%.1f GiB).",
-				modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, chosenQuant, qMem/gibBytes)
+			if requiresPreQuantized {
+				rec.Explanation.Quantization = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available. %s quantization (%.1f GiB) requires a pre-quantized model (GPTQ/AWQ).",
+					modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, strings.ToUpper(chosenQuant), qMem/gibBytes)
+			} else {
+				rec.Explanation.Quantization = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available. Using %s quantization (%.1f GiB).",
+					modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, chosenQuant, qMem/gibBytes)
+			}
 			rec.Explanation.TensorParallelDegree = fmt.Sprintf("TP=%d with %s quantization: %.1f GiB model across %d × %s.",
 				tp, chosenQuant, qMem/gibBytes, inst.AcceleratorCount, inst.AcceleratorName)
 		} else {
