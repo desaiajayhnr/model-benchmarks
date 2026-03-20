@@ -299,10 +299,13 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 
 	hfToken := r.Header.Get("X-HF-Token")
 
-	// Optional TP override from user
-	var tpOverride int
+	// Optional overrides from user
+	var opts recommend.RecommendOptions
 	if tpStr := r.URL.Query().Get("tp"); tpStr != "" {
-		fmt.Sscanf(tpStr, "%d", &tpOverride)
+		fmt.Sscanf(tpStr, "%d", &opts.TPOverride)
+	}
+	if overheadStr := r.URL.Query().Get("overhead_gib"); overheadStr != "" {
+		fmt.Sscanf(overheadStr, "%f", &opts.OverheadGiB)
 	}
 
 	// Look up instance type from DB.
@@ -359,7 +362,7 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(instType.AcceleratorType, "neuron") {
 		rec = recommend.RecommendNeuron(*modelCfg, inst)
 	} else {
-		rec = recommend.Recommend(*modelCfg, inst, allSpecs, tpOverride)
+		rec = recommend.Recommend(*modelCfg, inst, allSpecs, opts)
 	}
 
 	// Add valid TP options for UI dropdown

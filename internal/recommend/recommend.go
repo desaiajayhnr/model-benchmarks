@@ -41,9 +41,10 @@ type Recommendation struct {
 	Concurrency          int     `json:"concurrency"`
 	InputSequenceLength  int     `json:"input_sequence_length"`
 	OutputSequenceLength int     `json:"output_sequence_length"`
+	OverheadGiB          float64 `json:"overhead_gib"` // Runtime overhead used (for display/tuning)
 
-	Explanation Explanation `json:"explanation"`
-	ModelInfo   ModelInfo   `json:"model_info"`
+	Explanation  Explanation  `json:"explanation"`
+	ModelInfo    ModelInfo    `json:"model_info"`
 	InstanceInfo InstanceInfo `json:"instance_info"`
 
 	// Alternatives is non-nil when the model doesn't fit at native precision.
@@ -89,14 +90,10 @@ type QuantizationOption struct {
 }
 
 const (
-	// gpuMemoryUtilization matches vLLM recipes recommendation (0.80 vs default 0.90).
-	// This reserves 20% for CUDA context and other system overhead.
-	gpuMemoryUtilization = 0.80
+	// gpuMemoryUtilization matches vLLM's default (0.90).
+	// vLLM reserves 10% for CUDA context and PyTorch allocator overhead.
+	gpuMemoryUtilization = 0.90
 	gibBytes             = 1024 * 1024 * 1024
-
-	// vLLM default settings used in overhead calculations
-	defaultMaxNumSeqs = 256 // vLLM default max concurrent sequences
-	defaultBlockSize  = 16  // vLLM default tokens per KV cache block
 )
 
 // bytesPerParam returns the bytes per parameter for a given dtype/quantization.
@@ -136,123 +133,39 @@ func kvCachePerTokenBytes(cfg ModelConfig) float64 {
 	return 2 * float64(cfg.NumHiddenLayers) * float64(cfg.NumKeyValueHeads) * headDim * 2
 }
 
-// cudaContextBytes returns the fixed CUDA context and vLLM runtime overhead.
-func cudaContextBytes() float64 {
-	// CUDA context: ~0.5 GiB
-	// vLLM runtime + tokenizer: ~0.3 GiB
-	return 0.8 * gibBytes
-}
-
-// cudaGraphBytes estimates memory used by CUDA graph captures.
-// vLLM captures graphs for batch sizes [1,2,4,8,16,32,48,64...256].
-// Each graph stores activation tensors for that batch size.
-// Memory scales with hidden_size and intermediate_size (FFN).
-func cudaGraphBytes(cfg ModelConfig) float64 {
-	// Each captured graph holds activation memory for one forward pass.
-	// Activation size per token ≈ hidden_size * 4 (input, output, 2 intermediates)
-	// Plus FFN intermediate activations ≈ intermediate_size * 2
-	intermSize := cfg.IntermediateSize
-	if intermSize == 0 {
-		// Default: ~3.5x hidden_size for gated FFN (LLaMA-style)
-		intermSize = int(float64(cfg.HiddenSize) * 3.5)
-	}
-	activationPerToken := float64(cfg.HiddenSize)*4 + float64(intermSize)*2
-	// Sum of batch sizes in default capture set: 1+2+4+8+...+256 ≈ 3400 tokens
-	totalCapturedTokens := 3400.0
-	// 2 bytes per activation (FP16/BF16)
-	return activationPerToken * totalCapturedTokens * 2
-}
-
-// outputLogitsBytes estimates memory for the output logits buffer.
-// vLLM pre-allocates this for max_num_seqs × vocab_size × dtype_size.
-func outputLogitsBytes(cfg ModelConfig, maxNumSeqs int) float64 {
-	vocabSize := cfg.VocabSize
-	if vocabSize == 0 {
-		vocabSize = 32000 // conservative default
-	}
-	// Output logits: max_num_seqs × vocab_size × 4 bytes (FP32 logits)
-	return float64(maxNumSeqs) * float64(vocabSize) * 4
-}
-
-// blockTableBytes estimates memory for vLLM's block table tracking.
-// Block table maps sequence IDs to KV cache block indices.
-func blockTableBytes(maxNumSeqs, maxModelLen int) float64 {
-	// Each sequence needs max_blocks entries, each entry is 4 bytes (int32)
-	maxBlocksPerSeq := (maxModelLen + defaultBlockSize - 1) / defaultBlockSize
-	return float64(maxNumSeqs) * float64(maxBlocksPerSeq) * 4
-}
-
-// activationBytes estimates peak activation memory during inference.
-// This is the memory needed for intermediate computations in one forward pass.
-func activationBytes(cfg ModelConfig, batchSize int) float64 {
-	intermSize := cfg.IntermediateSize
-	if intermSize == 0 {
-		intermSize = int(float64(cfg.HiddenSize) * 3.5)
-	}
-	// Peak activation: batch × seq × max(hidden, intermediate) × dtype
-	// For attention: batch × heads × seq × seq × dtype (but paged attention reduces this)
-	// Simplified: batch × hidden × 8 (conservative multiplier for intermediates)
-	return float64(batchSize) * float64(cfg.HiddenSize) * 8 * 2 // 2 bytes for FP16
-}
-
-// inferenceOverheadBytes estimates PER-GPU non-weight, non-KV memory used by vLLM.
-// The tp parameter is the tensor parallelism degree, used to calculate per-GPU overhead.
+// inferenceOverheadBytes estimates vLLM-specific overhead beyond the 10% reserved
+// by gpu_memory_utilization. This covers CUDA graphs, activation memory, and
+// PyTorch allocator fragmentation.
 //
-// Empirical observation: On a 48GB GPU with Llama 8B (16GB weights), vLLM could
-// only allocate 11,504 tokens (~1.4GB) for KV cache. This means ~21GB went to
-// overhead per GPU - roughly 1.3x the per-GPU model weight size.
+// vLLM pre-captures ~35 CUDA graphs for different batch sizes (total ~3400 tokens).
+// Each graph allocates activation buffers proportional to:
+//   - Attention: 4 × hidden_size (Q, K, V, output projections)
+//   - FFN: intermediate_size (typically 3.5 × hidden_size for gated architectures)
 //
-// The overhead includes:
-// - CUDA context and runtime (~0.5-1 GB per GPU)
-// - CUDA graphs for captured batch sizes (~1-3 GB per GPU)
-// - PyTorch memory allocator fragmentation (~10-20%)
-// - Output logits and sampling buffers (shared but replicated)
-// - vLLM block tables and scheduler state
-// - Activation memory during forward pass
-// - NCCL buffers for tensor parallelism
-func inferenceOverheadBytes(cfg ModelConfig, maxModelLen, tp int) float64 {
-	if tp < 1 {
-		tp = 1
+// Formula: cuda_context + cuda_graphs_activation + fragmentation_margin
+//   = 0.5 GiB + (3400 × (4 × hidden + intermediate) × 2 bytes) + 1.0 GiB
+func inferenceOverheadBytes(cfg ModelConfig) float64 {
+	const (
+		cudaContextGiB       = 0.5  // Fixed CUDA runtime overhead
+		fragmentationGiB     = 1.0  // PyTorch allocator fragmentation margin
+		cudaGraphTokens      = 3400 // Sum of tokens across ~35 captured batch sizes
+		bytesPerActivation   = 2    // FP16 activations
+	)
+
+	// Use intermediate_size if available, otherwise estimate as 3.5 × hidden_size
+	intermediateSize := cfg.IntermediateSize
+	if intermediateSize == 0 {
+		intermediateSize = int(float64(cfg.HiddenSize) * 3.5)
 	}
 
-	// Calculate explicit overhead components (per GPU)
-	cudaCtx := cudaContextBytes()
-	// CUDA graphs are per-GPU but scale with per-GPU model shard
-	graphs := cudaGraphBytes(cfg) / float64(tp)
-	logits := outputLogitsBytes(cfg, defaultMaxNumSeqs) / float64(tp)
-	blockTbl := blockTableBytes(defaultMaxNumSeqs, maxModelLen) / float64(tp)
-	activation := activationBytes(cfg, 64) / float64(tp)
+	// Activation memory per token: attention (4 × hidden) + FFN (intermediate)
+	activationPerToken := float64(4*cfg.HiddenSize+intermediateSize) * bytesPerActivation
 
-	explicitOverhead := cudaCtx + graphs + logits + blockTbl + activation
+	// CUDA graphs activation memory
+	cudaGraphsBytes := float64(cudaGraphTokens) * activationPerToken
 
-	// Empirical multiplier: vLLM per-GPU overhead scales with per-GPU model size.
-	// The 1.3x multiplier was calibrated on single-GPU tight configs.
-	// For multi-GPU configs, overhead doesn't scale linearly because:
-	// - NCCL buffers are shared across GPUs
-	// - Block tables are distributed
-	// - Some overhead is fixed regardless of TP
-	modelBytesPerGPU := modelMemoryBytes(cfg.ParameterCount, "bfloat16") / float64(tp)
-
-	// Base multiplier with TP discount: more GPUs = proportionally less overhead per GPU
-	multiplier := 1.3
-	if tp >= 2 {
-		multiplier = 0.8 // multi-GPU has more efficient memory usage
-	}
-	if tp >= 4 {
-		multiplier = 0.5 // larger TP configs have even better efficiency
-	}
-	empiricalOverhead := modelBytesPerGPU * multiplier
-
-	// Minimum per-GPU overhead (CUDA context + basic runtime)
-	minOverhead := 3.0 * gibBytes
-
-	overhead := empiricalOverhead
-	if explicitOverhead > overhead {
-		overhead = explicitOverhead
-	}
-	if overhead < minOverhead {
-		overhead = minOverhead
-	}
+	// Total overhead
+	overhead := (cudaContextGiB+fragmentationGiB)*gibBytes + cudaGraphsBytes
 
 	return overhead
 }
@@ -315,10 +228,21 @@ func roundDownContext(tokens int) int {
 	return 512
 }
 
+// RecommendOptions holds optional overrides for the recommendation algorithm.
+type RecommendOptions struct {
+	TPOverride      int     // Force specific tensor parallel degree (0 = auto)
+	OverheadGiB     float64 // Override calculated overhead (0 = auto-calculate)
+}
+
+// DefaultOverheadGiB calculates the default runtime overhead for a model based on its dimensions.
+// This can be used by the UI to show users the calculated default before they override it.
+func DefaultOverheadGiB(cfg ModelConfig) float64 {
+	return inferenceOverheadBytes(cfg) / gibBytes
+}
+
 // Recommend computes configuration recommendations given model and instance specs.
 // allInstances is used to suggest a larger instance when the model doesn't fit.
-// tpOverride, if > 0, forces a specific tensor parallel degree instead of the default.
-func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, tpOverride int) *Recommendation {
+func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, opts RecommendOptions) *Recommendation {
 	dtype := nativeDtype(cfg)
 	perDeviceGiB := float64(inst.AcceleratorMemoryGiB) / float64(inst.AcceleratorCount)
 	perDeviceBytes := perDeviceGiB * gibBytes
@@ -354,10 +278,10 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		// Fits at native precision.
 		// Default to max valid TP to use all GPUs; allow user override.
 		tp := maxValidTPDegree(minGPUs, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)
-		if tpOverride > 0 && tpOverride >= minGPUs && tpOverride <= inst.AcceleratorCount {
+		if opts.TPOverride > 0 && opts.TPOverride >= minGPUs && opts.TPOverride <= inst.AcceleratorCount {
 			// Validate override divides attention heads
-			if cfg.NumAttentionHeads%tpOverride == 0 && cfg.NumKeyValueHeads%tpOverride == 0 {
-				tp = tpOverride
+			if cfg.NumAttentionHeads%opts.TPOverride == 0 && cfg.NumKeyValueHeads%opts.TPOverride == 0 {
+				tp = opts.TPOverride
 			}
 		}
 		rec.TensorParallelDegree = tp
@@ -441,31 +365,27 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 
 	rec.Explanation.Feasible = true
 
-	// Calculate max model length using improved overhead estimation.
-	// Memory layout per GPU with tensor parallelism:
-	//   - Model weights: split across TP GPUs
-	//   - CUDA context + runtime: per GPU
-	//   - CUDA graphs: per GPU, scales with model size
-	//   - Output logits buffer: shared
-	//   - Block tables: scales with max_seqs × max_blocks
-	//   - KV cache: remaining memory
+	// Calculate max model length.
+	// Beyond raw weights, vLLM consumes GPU memory for:
+	//   1. CUDA context + runtime: ~0.5 GiB (fixed)
+	//   2. CUDA graph captures: vLLM pre-captures ~35 graphs for different
+	//      batch sizes (sum ≈ 3400 tokens). Each graph allocates per-layer
+	//      activation buffers proportional to hidden_size and FFN width.
+	//      FFN intermediate_size ≈ 3.5 × hidden_size for gated architectures.
 	kvPerToken := kvCachePerTokenBytes(cfg)
 	effectiveModelMem := modelMemoryBytes(cfg.ParameterCount, chosenQuant)
-
-	// Use memory from the GPUs actually being used (TP), not total instance memory.
-	tpUsableBytes := usablePerDevice * float64(rec.TensorParallelDegree)
-
-	// First pass: estimate max_model_len to calculate overhead
-	prelimMaxLen := cfg.MaxPositionEmbeddings
-	if prelimMaxLen > 32768 {
-		prelimMaxLen = 32768 // conservative first estimate
+	// Use user-provided overhead if specified, otherwise calculate from model dimensions
+	var runtimeOverhead float64
+	if opts.OverheadGiB > 0 {
+		runtimeOverhead = opts.OverheadGiB * gibBytes
+	} else {
+		runtimeOverhead = inferenceOverheadBytes(cfg)
 	}
-
-	// Calculate per-GPU overhead (already accounts for TP in the calculation)
-	perGPUOverhead := inferenceOverheadBytes(cfg, prelimMaxLen, rec.TensorParallelDegree)
-	totalOverhead := perGPUOverhead * float64(rec.TensorParallelDegree)
-
-	remainingBytes := tpUsableBytes - effectiveModelMem - totalOverhead
+	rec.OverheadGiB = runtimeOverhead / gibBytes
+	// Use memory from the GPUs actually being used (TP), not total instance memory.
+	// With TP=1 on a 4-GPU instance, only 1 GPU's memory is available for KV cache.
+	tpUsableBytes := usablePerDevice * float64(rec.TensorParallelDegree)
+	remainingBytes := tpUsableBytes - effectiveModelMem - runtimeOverhead
 	if remainingBytes < 0 {
 		remainingBytes = 0
 	}

@@ -83,7 +83,7 @@ func TestValidateRecommendationsUniversal(t *testing.T) {
 
 	for _, m := range validationModels {
 		for _, inst := range validationInstances {
-			rec := Recommend(m.config, inst, validationInstances, 0)
+			rec := Recommend(m.config, inst, validationInstances, RecommendOptions{})
 
 			// Validate invariants
 			if rec.Explanation.Feasible {
@@ -144,7 +144,7 @@ func TestValidateMemoryEstimates(t *testing.T) {
 	// For each feasible config, verify memory math is consistent
 	for _, m := range validationModels {
 		for _, inst := range validationInstances {
-			rec := Recommend(m.config, inst, validationInstances, 0)
+			rec := Recommend(m.config, inst, validationInstances, RecommendOptions{})
 
 			if !rec.Explanation.Feasible {
 				continue
@@ -182,7 +182,7 @@ func TestPrintRecommendationMatrix(t *testing.T) {
 
 	for _, m := range validationModels {
 		for _, inst := range validationInstances {
-			rec := Recommend(m.config, inst, validationInstances, 0)
+			rec := Recommend(m.config, inst, validationInstances, RecommendOptions{})
 
 			feasible := "Yes"
 			quant := "native"

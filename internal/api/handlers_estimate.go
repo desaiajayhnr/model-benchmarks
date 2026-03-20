@@ -193,7 +193,7 @@ func (s *Server) handleEstimate(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(it.AcceleratorType, "neuron") {
 			rec = recommend.RecommendNeuron(*modelCfg, inst)
 		} else {
-			rec = recommend.Recommend(*modelCfg, inst, allSpecs, 0)
+			rec = recommend.Recommend(*modelCfg, inst, allSpecs, recommend.RecommendOptions{})
 		}
 
 		row := EstimateRow{
