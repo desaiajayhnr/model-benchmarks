@@ -400,8 +400,20 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens.",
 		remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen)
 
-	// Adjust input/output if model context is too small.
-	if maxModelLen < rec.InputSequenceLength+rec.OutputSequenceLength {
+	// Scale input/output sequence lengths based on available context.
+	// Longer sequences = more realistic workloads for large-context models.
+	switch {
+	case maxModelLen >= 16384:
+		rec.InputSequenceLength = 2048
+		rec.OutputSequenceLength = 1024
+	case maxModelLen >= 8192:
+		rec.InputSequenceLength = 1024
+		rec.OutputSequenceLength = 512
+	case maxModelLen >= 4096:
+		rec.InputSequenceLength = 512
+		rec.OutputSequenceLength = 256
+	default:
+		// For very small contexts, use 2/3 input, 1/3 output
 		rec.InputSequenceLength = maxModelLen * 2 / 3
 		rec.OutputSequenceLength = maxModelLen / 3
 	}
