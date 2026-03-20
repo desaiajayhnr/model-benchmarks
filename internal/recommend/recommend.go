@@ -342,11 +342,11 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			// Nothing fits — infeasible on this instance.
 			rec.Explanation.Feasible = false
 			if supportsFP8(inst.AcceleratorName) {
-				rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s. Even FP8 (%.1f GiB) exceeds %.0f GiB available on %s.",
+				rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s. Even FP8 (%.1f GiB) exceeds %.0f GiB available on %s. Use a larger instance or search HuggingFace for a GPTQ or AWQ quantized variant of this model.",
 					modelMemNative/gibBytes, dtype, modelMemoryBytes(cfg.ParameterCount, "fp8")/gibBytes,
 					totalUsableBytes/gibBytes, inst.Name)
 			} else {
-				rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available on %s. Use a larger instance or a pre-quantized model (GPTQ/AWQ).",
+				rec.Explanation.Reason = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available on %s. This GPU doesn't support runtime quantization. Use a larger instance or search HuggingFace for a GPTQ or AWQ quantized variant of this model.",
 					modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, inst.Name)
 			}
 			if rec.Alternatives.LargerInstance != "" {

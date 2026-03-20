@@ -307,9 +307,9 @@ func TestRecommendInfeasible_SuggestsPreQuantized(t *testing.T) {
 	if rec.Explanation.Reason == "" {
 		t.Error("expected a reason for infeasibility")
 	}
-	// Should mention pre-quantized models since FP8 isn't available
-	if !strings.Contains(rec.Explanation.Reason, "pre-quantized") {
-		t.Errorf("expected reason to mention pre-quantized models, got: %s", rec.Explanation.Reason)
+	// Should mention GPTQ/AWQ since FP8 isn't available
+	if !strings.Contains(rec.Explanation.Reason, "GPTQ or AWQ") {
+		t.Errorf("expected reason to mention GPTQ or AWQ, got: %s", rec.Explanation.Reason)
 	}
 }
 
