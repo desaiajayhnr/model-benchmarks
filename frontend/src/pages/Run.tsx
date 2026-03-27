@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createRun, getRecommendation, listInstanceTypes } from "../api";
 import type { InstanceType, RecommendResponse } from "../types";
@@ -20,7 +20,7 @@ export default function Run() {
   const [suggestError, setSuggestError] = useState("");
   const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
   const [validTPOptions, setValidTPOptions] = useState<number[]>([]);
-  const [recalculating, setRecalculating] = useState(false);
+  const overheadDebounceRef = useRef<number | null>(null);
 
   useEffect(() => {
     listInstanceTypes().then(setInstanceTypes).catch(() => {});
@@ -123,7 +123,6 @@ export default function Run() {
     set("tensor_parallel_degree", newTP);
     if (!recommendation || !recommendation.explanation.feasible) return;
 
-    setRecalculating(true);
     try {
       const rec = await getRecommendation(
         form.model_hf_id,
@@ -142,43 +141,44 @@ export default function Run() {
       }
     } catch {
       // Silently fail - user can still proceed with manual values
-    } finally {
-      setRecalculating(false);
     }
   }
 
-  // Recalculate recommendation when overhead is changed by user
-  async function handleOverheadChange(newOverhead: number) {
-    // If no recommendation yet, just update the form field
+  // Recalculate recommendation when overhead is changed by user (debounced)
+  function handleOverheadChange(newOverhead: number) {
+    // Always update slider immediately for responsive feel
+    set("overhead_gib", newOverhead);
+
+    // If no recommendation yet, no need to recalculate
     if (!recommendation || !recommendation.explanation.feasible) {
-      set("overhead_gib", newOverhead);
       return;
     }
 
-    setRecalculating(true);
-    try {
-      const rec = await getRecommendation(
-        form.model_hf_id,
-        form.instance_type_name,
-        form.hf_token || undefined,
-        form.tensor_parallel_degree,
-        newOverhead > 0 ? newOverhead : undefined
-      );
-      setRecommendation(rec);
-      // Update all form fields at once
-      setForm((prev) => ({
-        ...prev,
-        overhead_gib: newOverhead,
-        max_model_len: rec.explanation.feasible ? rec.max_model_len : prev.max_model_len,
-        concurrency: rec.explanation.feasible ? rec.concurrency : prev.concurrency,
-      }));
-    } catch (err) {
-      console.error("Overhead recalculation failed:", err);
-      // Still update the overhead field even if API fails
-      set("overhead_gib", newOverhead);
-    } finally {
-      setRecalculating(false);
+    // Clear any pending debounce
+    if (overheadDebounceRef.current) {
+      clearTimeout(overheadDebounceRef.current);
     }
+
+    // Debounce the API call
+    overheadDebounceRef.current = window.setTimeout(async () => {
+      try {
+        const rec = await getRecommendation(
+          form.model_hf_id,
+          form.instance_type_name,
+          form.hf_token || undefined,
+          form.tensor_parallel_degree,
+          newOverhead > 0 ? newOverhead : undefined
+        );
+        setRecommendation(rec);
+        setForm((prev) => ({
+          ...prev,
+          max_model_len: rec.explanation.feasible ? rec.max_model_len : prev.max_model_len,
+          concurrency: rec.explanation.feasible ? rec.concurrency : prev.concurrency,
+        }));
+      } catch (err) {
+        console.error("Overhead recalculation failed:", err);
+      }
+    }, 300);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -338,7 +338,7 @@ export default function Run() {
           </div>
         </div>
 
-        {/* Suggest Config */}
+        {/* Generate Config */}
         <div>
           <button
             type="button"
@@ -370,7 +370,7 @@ export default function Run() {
                 Analyzing...
               </span>
             ) : (
-              "Suggest Config"
+              "Generate Config"
             )}
           </button>
           {suggestError && (
@@ -468,9 +468,6 @@ export default function Run() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Tensor Parallel
-              {recalculating && (
-                <span className="ml-2 text-xs text-gray-400">(updating...)</span>
-              )}
             </label>
             {validTPOptions.length > 0 ? (
               <select
@@ -540,34 +537,29 @@ export default function Run() {
           </div>
         </div>
 
-        {/* Advanced: Runtime Overhead */}
-        {recommendation && recommendation.explanation.feasible && (
-          <div className="border-t border-gray-200 pt-4">
-            <div className="flex items-center gap-4">
-              <div className="w-48">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Runtime Overhead (GiB)
-                  {recalculating && (
-                    <span className="ml-2 text-xs text-gray-400">(updating...)</span>
-                  )}
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={form.overhead_gib || ""}
-                  onChange={(e) => handleOverheadChange(Number(e.target.value))}
-                  placeholder="auto"
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                />
-              </div>
-              <p className="text-xs text-gray-500 mt-5">
-                Increase if model fails with OOM. Qwen/Mistral often need 4-5 GiB.
-                Changing this recalculates max_model_len and concurrency.
-              </p>
-            </div>
+        {/* Runtime Overhead Slider */}
+        <div className="border-t border-gray-200 pt-4">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Runtime Overhead: {form.overhead_gib || 0} GiB
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            step={0.5}
+            value={form.overhead_gib || 0}
+            onChange={(e) => handleOverheadChange(Number(e.target.value))}
+            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+          />
+          <div className="flex justify-between text-xs text-gray-400 mt-1">
+            <span>0</span>
+            <span>5</span>
+            <span>10</span>
           </div>
-        )}
+          <p className="text-xs text-gray-500 mt-2">
+            Increase if model fails with OOM. Qwen/Mistral often need 4-5 GiB.
+          </p>
+        </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
