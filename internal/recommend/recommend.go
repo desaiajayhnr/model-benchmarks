@@ -21,6 +21,7 @@ type ModelConfig struct {
 	TorchDtype            string  `json:"torch_dtype"`
 	ModelType             string  `json:"model_type"`
 	Architecture          string  `json:"architecture"`
+	SlidingWindow         int     `json:"sliding_window"` // 0 = no sliding window (full attention)
 }
 
 // InstanceSpec holds GPU specs from the instance_types DB table.
@@ -68,6 +69,7 @@ type ModelInfo struct {
 	NativeDtype           string `json:"native_dtype"`
 	MaxPositionEmbeddings int    `json:"max_position_embeddings"`
 	Architecture          string `json:"architecture"`
+	SlidingWindow         int    `json:"sliding_window,omitempty"` // 0 = full attention
 }
 
 // InstanceInfo summarizes the instance specs in the response.
@@ -132,6 +134,16 @@ func modelMemoryBytes(params int64, quant string) float64 {
 func kvCachePerTokenBytes(cfg ModelConfig) float64 {
 	headDim := float64(cfg.HiddenSize) / float64(cfg.NumAttentionHeads)
 	return 2 * float64(cfg.NumHiddenLayers) * float64(cfg.NumKeyValueHeads) * headDim * 2
+}
+
+// effectiveKVCacheLength returns the effective context length for KV cache sizing.
+// For models with sliding window attention (e.g., Mistral), KV cache is capped
+// at the window size, dramatically reducing memory requirements for long contexts.
+func effectiveKVCacheLength(maxModelLen int, slidingWindow int) int {
+	if slidingWindow > 0 && slidingWindow < maxModelLen {
+		return slidingWindow
+	}
+	return maxModelLen
 }
 
 // inferenceOverheadBytes estimates vLLM-specific overhead beyond the 10% reserved
@@ -263,6 +275,7 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			NativeDtype:           dtype,
 			MaxPositionEmbeddings: cfg.MaxPositionEmbeddings,
 			Architecture:          cfg.ModelType,
+			SlidingWindow:         cfg.SlidingWindow,
 		},
 		InstanceInfo: InstanceInfo{
 			AcceleratorCount:     inst.AcceleratorCount,
@@ -420,8 +433,15 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	}
 	maxModelLen = roundDownContext(maxModelLen)
 	rec.MaxModelLen = maxModelLen
-	rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens.",
-		remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen)
+
+	// Generate explanation for max_model_len, noting sliding window if applicable
+	if cfg.SlidingWindow > 0 {
+		rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens. Note: Model uses sliding window attention (%d tokens), so KV cache per sequence is capped.",
+			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen, cfg.SlidingWindow)
+	} else {
+		rec.Explanation.MaxModelLen = fmt.Sprintf("%.1f GiB available for KV cache (TP=%d × %.0f GiB per GPU). Supports up to %d tokens.",
+			remainingBytes/gibBytes, rec.TensorParallelDegree, perDeviceGiB, maxModelLen)
+	}
 
 	// Scale input/output sequence lengths based on available context.
 	// Longer sequences = more realistic workloads for large-context models.
@@ -442,8 +462,11 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	}
 
 	// Calculate concurrency.
+	// For models with sliding window attention, KV cache per sequence is capped
+	// at the window size, allowing much higher concurrency.
 	avgSeqLen := float64(rec.InputSequenceLength + rec.OutputSequenceLength)
-	memPerSeq := kvPerToken * avgSeqLen
+	effectiveSeqLen := float64(effectiveKVCacheLength(int(avgSeqLen), cfg.SlidingWindow))
+	memPerSeq := kvPerToken * effectiveSeqLen
 	if memPerSeq > 0 {
 		maxConcurrent := int(remainingBytes / memPerSeq)
 		if maxConcurrent > 64 {
@@ -456,8 +479,15 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	} else {
 		rec.Concurrency = 1
 	}
-	rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory with %d-token average sequence length.",
-		remainingBytes/gibBytes, int(avgSeqLen))
+
+	// Generate explanation for concurrency, noting sliding window benefit
+	if cfg.SlidingWindow > 0 && cfg.SlidingWindow < int(avgSeqLen) {
+		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory. Sliding window (%d tokens) caps KV per sequence, enabling higher concurrency.",
+			remainingBytes/gibBytes, cfg.SlidingWindow)
+	} else {
+		rec.Explanation.Concurrency = fmt.Sprintf("Based on %.1f GiB KV cache memory with %d-token average sequence length.",
+			remainingBytes/gibBytes, int(avgSeqLen))
+	}
 
 	return rec
 }

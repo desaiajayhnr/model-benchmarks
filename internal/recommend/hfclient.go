@@ -53,6 +53,10 @@ type hfConfigJSON struct {
 	VocabSize             int    `json:"vocab_size"`
 	IntermediateSize      int    `json:"intermediate_size"`
 
+	// Sliding window attention (Mistral, Mixtral, etc.)
+	// If set, KV cache is capped at this size instead of max_position_embeddings.
+	SlidingWindow *int `json:"sliding_window"`
+
 	// MoE fields (DeepSeek, Mixtral, etc.)
 	NRoutedExperts      int `json:"n_routed_experts"`
 	NSharedExperts      int `json:"n_shared_experts"`
@@ -122,6 +126,11 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 		MaxPositionEmbeddings: cr.config.MaxPositionEmbeddings,
 		TorchDtype:            cr.config.TorchDtype,
 		ModelType:             cr.config.ModelType,
+	}
+
+	// Sliding window attention (Mistral, Mixtral, etc.)
+	if cr.config.SlidingWindow != nil && *cr.config.SlidingWindow > 0 {
+		cfg.SlidingWindow = *cr.config.SlidingWindow
 	}
 
 	if mr.model.Safetensors != nil && mr.model.Safetensors.Total > 0 {

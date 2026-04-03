@@ -73,6 +73,11 @@ export default function RecommendationCards({ recommendation }: Props) {
       <div className="text-sm text-green-700 mb-4 flex items-center gap-2 flex-wrap">
         <span className="font-medium">{modelSummary}</span>
         <span className="text-green-600">({model_info.native_dtype})</span>
+        {model_info.sliding_window && model_info.sliding_window > 0 && (
+          <span className="text-xs bg-green-200 text-green-800 px-1.5 py-0.5 rounded" title="KV cache capped at window size for efficient memory usage">
+            {(model_info.sliding_window / 1024).toFixed(0)}K window
+          </span>
+        )}
         <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
         </svg>

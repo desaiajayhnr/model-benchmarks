@@ -139,6 +139,7 @@ export interface RecommendModelInfo {
   native_dtype: string;
   max_position_embeddings: number;
   architecture: string;
+  sliding_window?: number; // 0 or undefined = full attention
 }
 
 export interface RecommendInstanceInfo {
