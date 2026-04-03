@@ -139,6 +139,7 @@ export interface RecommendModelInfo {
   native_dtype: string;
   max_position_embeddings: number;
   architecture: string;
+  sliding_window?: number; // 0 or undefined = full attention
 }
 
 export interface RecommendInstanceInfo {
@@ -267,4 +268,46 @@ export interface EstimateResponse {
   model_info: EstimateModelInfo;
   estimates: EstimateRow[];
   summary: EstimateSummary;
+}
+
+// PRD-15: Memory breakdown types
+export interface MemoryBreakdown {
+  model_weights_gib: number;
+  kv_cache_gib: number;
+  quantization_metadata_gib: number;
+  block_table_gib: number;
+  runtime_overhead_gib: number;
+  total_used_gib: number;
+  total_available_gib: number;
+  headroom_gib: number;
+}
+
+export interface MemoryBreakdownResponse extends MemoryBreakdown {
+  warning_message?: string;
+}
+
+// PRD-15: OOM history types
+export interface OOMEvent {
+  id: string;
+  run_id?: string;
+  model_hf_id: string;
+  instance_type: string;
+  pod_name: string;
+  container_name?: string;
+  detection_method: string;
+  exit_code?: number;
+  message: string;
+  occurred_at: string;
+  created_at: string;
+  tensor_parallel_degree?: number;
+  concurrency?: number;
+  max_model_len?: number;
+  quantization?: string;
+}
+
+export interface OOMHistory {
+  model_hf_id: string;
+  instance_type: string;
+  events: OOMEvent[];
+  total_count: number;
 }

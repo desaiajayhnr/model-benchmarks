@@ -1,6 +1,9 @@
 package database
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Repo defines the interface for benchmark data operations.
 // The concrete *Repository satisfies this interface. Use this interface
@@ -21,6 +24,41 @@ type Repo interface {
 	UpsertPricing(ctx context.Context, p *Pricing) error
 	ListPricing(ctx context.Context, region string) ([]PricingRow, error)
 	ListInstanceTypes(ctx context.Context) ([]InstanceType, error)
+	// OOM event tracking
+	OOMRepo
+}
+
+// OOMRepo defines the interface for OOM event operations.
+type OOMRepo interface {
+	CreateOOMEvent(ctx context.Context, event *OOMEvent) error
+	GetOOMHistory(ctx context.Context, modelHfID, instanceType string, limit int) (*OOMHistory, error)
+}
+
+// OOMEvent represents an OOM event record (mirrors oom.Event for database layer).
+type OOMEvent struct {
+	ID                   string
+	RunID                string
+	ModelHfID            string
+	InstanceType         string
+	PodName              string
+	ContainerName        string
+	DetectionMethod      string
+	ExitCode             int
+	Message              string
+	OccurredAt           time.Time
+	CreatedAt            time.Time
+	TensorParallelDegree int
+	Concurrency          int
+	MaxModelLen          int
+	Quantization         string
+}
+
+// OOMHistory holds OOM events for a model+instance combination.
+type OOMHistory struct {
+	ModelHfID    string
+	InstanceType string
+	Events       []OOMEvent
+	TotalCount   int
 }
 
 // Compile-time check that *Repository implements Repo.

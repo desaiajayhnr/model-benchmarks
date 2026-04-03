@@ -100,7 +100,7 @@ func TestWaitForReady_AlreadyReady(t *testing.T) {
 	dep.Status.ReadyReplicas = 1
 	client.AppsV1().Deployments("default").UpdateStatus(ctx, dep, metav1.UpdateOptions{})
 
-	err := o.waitForReady(ctx, "default", "bench-12345678")
+	err := o.waitForReady(ctx, "default", "bench-12345678", cfg)
 	if err != nil {
 		t.Fatalf("waitForReady: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestWaitForReady_ContextCancelled(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
 
-	err := o.waitForReady(cancelCtx, "default", "bench-12345678")
+	err := o.waitForReady(cancelCtx, "default", "bench-12345678", cfg)
 	if err == nil {
 		t.Error("expected error when context cancelled")
 	}

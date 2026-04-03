@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createRun, getRecommendation, listInstanceTypes } from "../api";
-import type { InstanceType, RecommendResponse } from "../types";
+import { createRun, getRecommendation, listInstanceTypes, getMemoryBreakdown, getOOMHistory } from "../api";
+import type { InstanceType, RecommendResponse, MemoryBreakdownResponse, OOMHistory } from "../types";
 import { validateToken } from "../hfApi";
 import type { HfModelDetail } from "../hfApi";
 import ModelCombobox from "../components/ModelCombobox";
+import MemoryBreakdown from "../components/MemoryBreakdown";
+import OOMWarning from "../components/OOMWarning";
+import RecommendationCards from "../components/RecommendationCards";
 
 type TokenStatus = "idle" | "validating" | "valid" | "invalid";
 
@@ -21,10 +24,12 @@ export default function Run() {
   const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
   const [validTPOptions, setValidTPOptions] = useState<number[]>([]);
   const overheadDebounceRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    listInstanceTypes().then(setInstanceTypes).catch(() => {});
-  }, []);
+  const autoRecommendRef = useRef<number | null>(null);
+  const memoryBreakdownRef = useRef<number | null>(null);
+  // PRD-15: Memory breakdown and OOM state
+  const [memoryBreakdown, setMemoryBreakdown] = useState<MemoryBreakdownResponse | null>(null);
+  const [memoryBreakdownLoading, setMemoryBreakdownLoading] = useState(false);
+  const [oomHistory, setOOMHistory] = useState<OOMHistory | null>(null);
 
   // Initialize form with URL params (from Estimate page) or defaults
   const [form, setForm] = useState(() => {
@@ -53,6 +58,124 @@ export default function Run() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  // Load instance types on mount
+  useEffect(() => {
+    listInstanceTypes().then(setInstanceTypes).catch(() => {});
+  }, []);
+
+  // PRD-15: Auto-recommend when model and instance are both selected
+  useEffect(() => {
+    const model = form.model_hf_id.trim();
+    const instance = form.instance_type_name;
+
+    if (!model || !instance) {
+      return;
+    }
+
+    // Clear previous debounce
+    if (autoRecommendRef.current) {
+      clearTimeout(autoRecommendRef.current);
+    }
+
+    // Debounce to avoid rapid API calls while user is still selecting
+    autoRecommendRef.current = window.setTimeout(async () => {
+      setSuggestError("");
+      setSuggesting(true);
+      setRecommendation(null);
+      setValidTPOptions([]);
+      setMemoryBreakdown(null);
+      setOOMHistory(null);
+
+      try {
+        // Fetch recommendation and OOM history in parallel
+        const [rec, oomHist] = await Promise.all([
+          getRecommendation(model, instance, form.hf_token || undefined),
+          getOOMHistory(model, instance).catch(() => null),
+        ]);
+
+        setRecommendation(rec);
+        setValidTPOptions(rec.valid_tp_options ?? []);
+        setOOMHistory(oomHist);
+
+        if (rec.explanation.feasible) {
+          setForm((prev) => ({
+            ...prev,
+            tensor_parallel_degree: rec.tensor_parallel_degree,
+            quantization: rec.quantization ?? "",
+            max_model_len: rec.max_model_len,
+            concurrency: rec.concurrency,
+            input_sequence_length: rec.input_sequence_length,
+            output_sequence_length: rec.output_sequence_length,
+            overhead_gib: rec.overhead_gib,
+          }));
+        }
+      } catch (err) {
+        setSuggestError(
+          err instanceof Error ? err.message : "Failed to get recommendation"
+        );
+      } finally {
+        setSuggesting(false);
+      }
+    }, 500);
+
+    return () => {
+      if (autoRecommendRef.current) {
+        clearTimeout(autoRecommendRef.current);
+      }
+    };
+  }, [form.model_hf_id, form.instance_type_name, form.hf_token]);
+
+  // PRD-15: Update memory breakdown when parameters change
+  useEffect(() => {
+    if (!recommendation || !recommendation.explanation.feasible) {
+      setMemoryBreakdown(null);
+      return;
+    }
+
+    // Clear previous debounce
+    if (memoryBreakdownRef.current) {
+      clearTimeout(memoryBreakdownRef.current);
+    }
+
+    // Debounce memory breakdown updates
+    memoryBreakdownRef.current = window.setTimeout(async () => {
+      setMemoryBreakdownLoading(true);
+      try {
+        const breakdown = await getMemoryBreakdown({
+          model: form.model_hf_id,
+          instanceType: form.instance_type_name,
+          tp: form.tensor_parallel_degree,
+          quantization: form.quantization || undefined,
+          maxModelLen: form.max_model_len || undefined,
+          concurrency: form.concurrency,
+          overheadGiB: form.overhead_gib || undefined,
+          hfToken: form.hf_token || undefined,
+        });
+        setMemoryBreakdown(breakdown);
+      } catch (err) {
+        console.error("Memory breakdown failed:", err);
+      } finally {
+        setMemoryBreakdownLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      if (memoryBreakdownRef.current) {
+        clearTimeout(memoryBreakdownRef.current);
+      }
+    };
+  }, [
+    recommendation,
+    form.model_hf_id,
+    form.instance_type_name,
+    form.tensor_parallel_degree,
+    form.quantization,
+    form.max_model_len,
+    form.concurrency,
+    form.overhead_gib,
+    form.hf_token,
+  ]);
+
   const handleTokenBlur = useCallback(async () => {
     const token = form.hf_token.trim();
     if (!token) {
@@ -78,44 +201,8 @@ export default function Run() {
   function handleModelSelect(detail: HfModelDetail) {
     set("model_hf_revision", detail.sha);
     setRecommendation(null);
-  }
-
-  const canSuggest =
-    form.model_hf_id.trim() !== "" && form.instance_type_name !== "";
-
-  async function handleSuggest() {
-    setSuggestError("");
-    setSuggesting(true);
-    setRecommendation(null);
-    setValidTPOptions([]);
-    try {
-      const rec = await getRecommendation(
-        form.model_hf_id,
-        form.instance_type_name,
-        form.hf_token || undefined
-      );
-      setRecommendation(rec);
-      setValidTPOptions(rec.valid_tp_options ?? []);
-
-      if (rec.explanation.feasible) {
-        setForm((prev) => ({
-          ...prev,
-          tensor_parallel_degree: rec.tensor_parallel_degree,
-          quantization: rec.quantization ?? "",
-          max_model_len: rec.max_model_len,
-          concurrency: rec.concurrency,
-          input_sequence_length: rec.input_sequence_length,
-          output_sequence_length: rec.output_sequence_length,
-          overhead_gib: rec.overhead_gib,
-        }));
-      }
-    } catch (err) {
-      setSuggestError(
-        err instanceof Error ? err.message : "Failed to get recommendation"
-      );
-    } finally {
-      setSuggesting(false);
-    }
+    setMemoryBreakdown(null);
+    setOOMHistory(null);
   }
 
   // Recalculate recommendation when TP is changed by user
@@ -301,6 +388,8 @@ export default function Run() {
                 const isNeuron = /^(inf|trn)/.test(e.target.value);
                 set("framework", isNeuron ? "vllm-neuron" : "vllm");
                 setRecommendation(null);
+                setMemoryBreakdown(null);
+                setOOMHistory(null);
               }}
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
             >
@@ -338,86 +427,26 @@ export default function Run() {
           </div>
         </div>
 
-        {/* Generate Config */}
-        <div>
-          <button
-            type="button"
-            disabled={!canSuggest || suggesting}
-            onClick={handleSuggest}
-            className="rounded-md border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {suggesting ? (
-              <span className="flex items-center gap-2">
-                <svg
-                  className="animate-spin h-4 w-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                Analyzing...
-              </span>
-            ) : (
-              "Generate Config"
-            )}
-          </button>
-          {suggestError && (
-            <p className="mt-1 text-sm text-red-600">{suggestError}</p>
-          )}
-        </div>
-
-        {/* Explanation panel */}
-        {recommendation && recommendation.explanation.feasible && (
-          <div className="rounded-md border border-green-200 bg-green-50 p-4 text-sm">
-            <p className="font-medium text-green-800 mb-2">
-              Recommended Configuration
-            </p>
-            <p className="text-green-700 mb-2">
-              {recommendation.model_info.architecture.toUpperCase()}{" "}
-              {(
-                recommendation.model_info.parameter_count / 1e9
-              ).toFixed(1)}
-              B ({recommendation.model_info.native_dtype}) on{" "}
-              {recommendation.instance_info.accelerator_count}x{" "}
-              {recommendation.instance_info.accelerator_name} (
-              {recommendation.instance_info.accelerator_memory_gib} GiB)
-            </p>
-            <ul className="space-y-1 text-green-700">
-              <li>
-                Tensor Parallel = {recommendation.tensor_parallel_degree} —{" "}
-                {recommendation.explanation.tensor_parallel_degree}
-              </li>
-              <li>
-                Quantization ={" "}
-                {recommendation.quantization ?? "None"} —{" "}
-                {recommendation.explanation.quantization}
-              </li>
-              <li>
-                Max Model Len = {recommendation.max_model_len} —{" "}
-                {recommendation.explanation.max_model_len}
-              </li>
-              <li>
-                Concurrency = {recommendation.concurrency} —{" "}
-                {recommendation.explanation.concurrency}
-              </li>
-              <li>
-                Runtime Overhead = {recommendation.overhead_gib.toFixed(2)} GiB —{" "}
-                Estimated CUDA context, graphs, and fragmentation
-              </li>
-            </ul>
+        {/* Auto-recommend status */}
+        {suggesting && (
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Analyzing model configuration...
           </div>
+        )}
+        {suggestError && (
+          <p className="text-sm text-red-600 bg-red-50 rounded-md px-3 py-2">{suggestError}</p>
+        )}
+
+        {/* PRD-15: OOM Warning */}
+        <OOMWarning history={oomHistory} />
+
+        {/* Recommendation Cards */}
+        {recommendation && recommendation.explanation.feasible && (
+          <RecommendationCards recommendation={recommendation} />
         )}
 
         {/* Infeasibility warning with alternatives */}
@@ -461,6 +490,11 @@ export default function Run() {
               </div>
             )}
           </div>
+        )}
+
+        {/* PRD-15: Memory Breakdown (always visible when recommendation exists) */}
+        {recommendation && recommendation.explanation.feasible && (
+          <MemoryBreakdown breakdown={memoryBreakdown} loading={memoryBreakdownLoading} />
         )}
 
         {/* Config */}

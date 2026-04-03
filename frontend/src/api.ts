@@ -12,6 +12,8 @@ import type {
   RecommendResponse,
   EstimateFilter,
   EstimateResponse,
+  MemoryBreakdownResponse,
+  OOMHistory,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -140,4 +142,46 @@ export async function getEstimate(
   if (hfToken) headers["X-HF-Token"] = hfToken;
 
   return fetchJSON<EstimateResponse>(`${BASE}/estimate?${params}`, { headers });
+}
+
+// PRD-15: Memory breakdown
+export interface MemoryBreakdownParams {
+  model: string;
+  instanceType: string;
+  tp?: number;
+  quantization?: string;
+  maxModelLen?: number;
+  concurrency?: number;
+  overheadGiB?: number;
+  hfToken?: string;
+}
+
+export async function getMemoryBreakdown(
+  params: MemoryBreakdownParams
+): Promise<MemoryBreakdownResponse> {
+  const urlParams = new URLSearchParams({
+    model: params.model,
+    instance_type: params.instanceType,
+  });
+  if (params.tp) urlParams.set("tp", String(params.tp));
+  if (params.quantization) urlParams.set("quantization", params.quantization);
+  if (params.maxModelLen) urlParams.set("max_model_len", String(params.maxModelLen));
+  if (params.concurrency) urlParams.set("concurrency", String(params.concurrency));
+  if (params.overheadGiB) urlParams.set("overhead_gib", String(params.overheadGiB));
+
+  const headers: Record<string, string> = {};
+  if (params.hfToken) headers["X-HF-Token"] = params.hfToken;
+
+  return fetchJSON<MemoryBreakdownResponse>(`${BASE}/memory-breakdown?${urlParams}`, { headers });
+}
+
+// PRD-15: OOM history
+export async function getOOMHistory(
+  model: string,
+  instanceType: string,
+  limit?: number
+): Promise<OOMHistory> {
+  const params = new URLSearchParams({ model, instance_type: instanceType });
+  if (limit) params.set("limit", String(limit));
+  return fetchJSON<OOMHistory>(`${BASE}/oom-history?${params}`);
 }

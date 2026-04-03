@@ -15,6 +15,7 @@ import (
 	"github.com/accelbench/accelbench/internal/database"
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
+	"github.com/accelbench/accelbench/internal/oom"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -45,18 +46,20 @@ type RunConfig struct {
 
 // Orchestrator manages the benchmark lifecycle.
 type Orchestrator struct {
-	client  kubernetes.Interface
-	repo    database.Repo
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc // runID → cancel
+	client      kubernetes.Interface
+	repo        database.Repo
+	oomDetector *oom.Detector
+	mu          sync.Mutex
+	cancels     map[string]context.CancelFunc // runID → cancel
 }
 
 // New creates a new Orchestrator.
 func New(client kubernetes.Interface, repo database.Repo) *Orchestrator {
 	return &Orchestrator{
-		client:  client,
-		repo:    repo,
-		cancels: make(map[string]context.CancelFunc),
+		client:      client,
+		repo:        repo,
+		oomDetector: oom.NewDetector(client, defaultNamespace),
+		cancels:     make(map[string]context.CancelFunc),
 	}
 }
 
@@ -108,7 +111,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 
 	// Phase 3: Wait for readiness.
 	log.Printf("[%s] waiting for model readiness", cfg.RunID[:8])
-	if err := o.waitForReady(ctx, ns, modelName); err != nil {
+	if err := o.waitForReady(ctx, ns, modelName, cfg); err != nil {
 		o.markFailed(ctx, cfg.RunID)
 		return fmt.Errorf("wait for readiness: %w", err)
 	}
@@ -226,7 +229,7 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 	return o.applyYAML(ctx, ns, yamlStr)
 }
 
-func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string) error {
+func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg RunConfig) error {
 	deadline := time.Now().Add(readinessTimeout)
 	for time.Now().Before(deadline) {
 		dep, err := o.client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
@@ -236,6 +239,22 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string) error 
 		if dep.Status.ReadyReplicas >= 1 {
 			return nil
 		}
+
+		// Check for OOM events on pods belonging to this deployment
+		pods, _ := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("app=%s", name),
+		})
+		for _, pod := range pods.Items {
+			events, err := o.oomDetector.CheckPod(ctx, pod.Name)
+			if err == nil && len(events) > 0 {
+				// Record OOM event and fail immediately
+				for _, ev := range events {
+					o.recordOOMEvent(ctx, cfg, ev)
+				}
+				return fmt.Errorf("OOM detected: %s", events[0].Message)
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -538,4 +557,29 @@ func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
 	modelName := fmt.Sprintf("bench-%s", runID[:8])
 	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
 	o.teardown(ctx, ns, modelName, loadgenName)
+}
+
+// recordOOMEvent saves an OOM event to the database.
+func (o *Orchestrator) recordOOMEvent(ctx context.Context, cfg RunConfig, ev oom.Event) {
+	dbEvent := &database.OOMEvent{
+		RunID:                cfg.RunID,
+		ModelHfID:            cfg.Request.ModelHfID,
+		InstanceType:         cfg.Request.InstanceTypeName,
+		PodName:              ev.PodName,
+		ContainerName:        ev.ContainerName,
+		DetectionMethod:      ev.DetectionMethod,
+		ExitCode:             ev.ExitCode,
+		Message:              ev.Message,
+		OccurredAt:           ev.OccurredAt,
+		TensorParallelDegree: cfg.Request.TensorParallelDegree,
+		Concurrency:          cfg.Request.Concurrency,
+		MaxModelLen:          cfg.Request.MaxModelLen,
+		Quantization:         derefStr(cfg.Request.Quantization),
+	}
+
+	if err := o.repo.CreateOOMEvent(ctx, dbEvent); err != nil {
+		log.Printf("[%s] failed to record OOM event: %v", cfg.RunID[:8], err)
+	} else {
+		log.Printf("[%s] recorded OOM event: %s", cfg.RunID[:8], ev.Message)
+	}
 }
