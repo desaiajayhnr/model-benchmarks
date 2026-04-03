@@ -16,6 +16,7 @@ type MockRepo struct {
 	runs      map[string]*BenchmarkRun     // keyed by run ID
 	metrics   map[string]*BenchmarkMetrics // keyed by run ID
 	pricing   map[string]*Pricing          // keyed by "instanceTypeID|region|date"
+	oomEvents []OOMEvent                   // OOM events
 	nextID    int
 }
 
@@ -272,6 +273,45 @@ func (m *MockRepo) ListInstanceTypes(_ context.Context) ([]InstanceType, error) 
 		result = append(result, *it)
 	}
 	return result, nil
+}
+
+// CreateOOMEvent inserts a new OOM event record.
+func (m *MockRepo) CreateOOMEvent(_ context.Context, event *OOMEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	event.ID = fmt.Sprintf("oom-%08d", m.nextID)
+	event.CreatedAt = time.Now()
+	m.oomEvents = append(m.oomEvents, *event)
+	return nil
+}
+
+// GetOOMHistory returns OOM events for a model+instance combination.
+func (m *MockRepo) GetOOMHistory(_ context.Context, modelHfID, instanceType string, limit int) (*OOMHistory, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if limit <= 0 {
+		limit = 10
+	}
+
+	history := &OOMHistory{
+		ModelHfID:    modelHfID,
+		InstanceType: instanceType,
+	}
+
+	for _, ev := range m.oomEvents {
+		if ev.ModelHfID == modelHfID && ev.InstanceType == instanceType {
+			history.Events = append(history.Events, ev)
+			history.TotalCount++
+		}
+	}
+
+	if len(history.Events) > limit {
+		history.Events = history.Events[:limit]
+	}
+
+	return history, nil
 }
 
 // ListCatalog returns catalog entries matching the given filter.
