@@ -214,6 +214,15 @@ func (r *Repository) UpdateRunStatus(ctx context.Context, runID, status string) 
 	return nil
 }
 
+// UpdateLoadgenConfig stores the inference-perf configuration YAML for a benchmark run.
+func (r *Repository) UpdateLoadgenConfig(ctx context.Context, runID, config string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE benchmark_runs SET loadgen_config = $1 WHERE id = $2`, config, runID)
+	if err != nil {
+		return fmt.Errorf("update loadgen config: %w", err)
+	}
+	return nil
+}
+
 // PersistMetrics inserts benchmark metrics and marks the run as completed
 // within a single transaction. It verifies the write by reading back the
 // inserted metrics row before committing.

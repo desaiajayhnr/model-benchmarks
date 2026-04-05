@@ -17,10 +17,12 @@ type LoadgenOutput struct {
 }
 
 // RequestResult holds per-request measurements from the load generator.
+// Supports both legacy AccelBench loadgen and inference-perf output formats.
 type RequestResult struct {
 	TTFTMs          float64 `json:"ttft_ms"`
 	E2ELatencyMs    float64 `json:"e2e_latency_ms"`
-	ITLMs           float64 `json:"itl_ms"`
+	ITLMs           float64 `json:"itl_ms"`            // legacy loadgen
+	TPOTMs          float64 `json:"tpot_ms"`           // inference-perf (time per output token)
 	OutputTokens    int     `json:"output_tokens"`
 	InputTokens     int     `json:"input_tokens"`
 	DurationSeconds float64 `json:"duration_seconds"`
@@ -28,13 +30,23 @@ type RequestResult struct {
 }
 
 // Summary holds aggregate metrics from the load generator.
+// Supports both legacy AccelBench loadgen and inference-perf output formats.
 type Summary struct {
-	TotalDurationSeconds      float64  `json:"total_duration_seconds"`
-	TotalRequests             int      `json:"total_requests"`
-	SuccessfulRequests        int      `json:"successful_requests"`
-	FailedRequests            int      `json:"failed_requests"`
-	ThroughputAggregateTPS    float64  `json:"throughput_aggregate_tps"`
-	RequestsPerSecond         float64  `json:"requests_per_second"`
+	// Legacy loadgen fields
+	TotalDurationSeconds   float64 `json:"total_duration_seconds"`
+	ThroughputAggregateTPS float64 `json:"throughput_aggregate_tps"`
+
+	// inference-perf fields
+	TotalDurationS float64 `json:"total_duration_s"`
+	ThroughputTPS  float64 `json:"throughput_tps"`
+
+	// Common fields
+	TotalRequests      int     `json:"total_requests"`
+	SuccessfulRequests int     `json:"successful_requests"`
+	FailedRequests     int     `json:"failed_requests"`
+	RequestsPerSecond  float64 `json:"requests_per_second"`
+
+	// Optional accelerator metrics (from legacy loadgen)
 	AcceleratorUtilizationPct *float64 `json:"accelerator_utilization_pct,omitempty"`
 	AcceleratorMemoryPeakGiB  *float64 `json:"accelerator_memory_peak_gib,omitempty"`
 }
@@ -79,6 +91,7 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 
 // ComputeMetrics takes parsed loadgen output and computes the full set of
 // benchmark metrics including p50/p90/p95/p99 percentiles.
+// Supports both legacy AccelBench loadgen and inference-perf output formats.
 func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 	successful := filterSuccessful(out.Requests)
 
@@ -87,7 +100,12 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 	for _, r := range successful {
 		ttfts = append(ttfts, r.TTFTMs)
 		e2es = append(e2es, r.E2ELatencyMs)
-		itls = append(itls, r.ITLMs)
+		// Use ITL if available, otherwise use TPOT (inference-perf)
+		itl := r.ITLMs
+		if itl == 0 && r.TPOTMs > 0 {
+			itl = r.TPOTMs
+		}
+		itls = append(itls, itl)
 		totalOutputTokens += r.OutputTokens
 	}
 
@@ -106,9 +124,22 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 		}
 	}
 
-	aggTPS := &out.Summary.ThroughputAggregateTPS
+	// Handle both field naming conventions for aggregate TPS
+	aggTPSVal := out.Summary.ThroughputAggregateTPS
+	if aggTPSVal == 0 {
+		aggTPSVal = out.Summary.ThroughputTPS // inference-perf field
+	}
+	aggTPS := &aggTPSVal
+
 	rps := &out.Summary.RequestsPerSecond
-	dur := &out.Summary.TotalDurationSeconds
+
+	// Handle both field naming conventions for duration
+	durVal := out.Summary.TotalDurationSeconds
+	if durVal == 0 {
+		durVal = out.Summary.TotalDurationS // inference-perf field
+	}
+	dur := &durVal
+
 	successCount := out.Summary.SuccessfulRequests
 	failCount := out.Summary.FailedRequests
 

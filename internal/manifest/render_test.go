@@ -142,17 +142,13 @@ func TestRenderModelDeployment_NoQuantization(t *testing.T) {
 
 func TestRenderLoadgenJob(t *testing.T) {
 	params := LoadgenJobParams{
-		Name:                 "loadgen-abc123",
-		Namespace:            "accelbench",
-		TargetHost:           "bench-test123",
-		TargetPort:           8000,
-		ModelHfID:            "meta-llama/Llama-3.1-70B-Instruct",
-		Concurrency:          16,
-		InputSequenceLength:  512,
-		OutputSequenceLength: 256,
-		DatasetName:          "sharegpt",
-		NumRequests:          200,
-		WarmupRequests:       10,
+		Name:               "loadgen-abc123",
+		Namespace:          "accelbench",
+		InferencePerfImage: "quay.io/inference-perf/inference-perf:v0.2.0",
+		ConfigMapName:      "loadgen-config-abc123",
+		ResultsS3Bucket:    "accelbench-results",
+		ResultsS3Key:       "results/test-run.json",
+		AWSRegion:          "us-east-2",
 	}
 
 	out, err := RenderLoadgenJob(params)
@@ -166,23 +162,140 @@ func TestRenderLoadgenJob(t *testing.T) {
 	}{
 		{"job name", "name: loadgen-abc123"},
 		{"namespace", "namespace: accelbench"},
-		{"target url", "http://bench-test123:8000/v1/completions"},
-		{"model id env", "meta-llama/Llama-3.1-70B-Instruct"},
-		{"concurrency env", `value: "16"`},
-		{"input seq len", `value: "512"`},
-		{"output seq len", `value: "256"`},
-		{"dataset env", `value: "sharegpt"`},
-		{"num requests", `value: "200"`},
-		{"warmup requests", `value: "10"`},
+		{"inference-perf image", "quay.io/inference-perf/inference-perf:v0.2.0"},
+		{"config file arg", "--config_file"},
+		{"config mount path", "/workspace/config.yml"},
+		{"configmap name", "loadgen-config-abc123"},
+		{"results mount", "/tmp/results"},
+		{"s3 bucket", "accelbench-results"},
+		{"s3 key", "results/test-run.json"},
+		{"aws region", "us-east-2"},
 		{"system node affinity", "accelbench/node-type"},
-		{"min duration env", "MIN_DURATION_SECONDS"},
 		{"service account", "serviceAccountName: accelbench-loadgen"},
 		{"backoff limit", "backoffLimit: 0"},
+		{"s3-upload sidecar", "name: s3-upload"},
 	}
 
 	for _, c := range checks {
 		if !strings.Contains(out, c.want) {
 			t.Errorf("%s: output does not contain %q", c.name, c.want)
+		}
+	}
+}
+
+func TestRenderLoadgenJob_NoS3(t *testing.T) {
+	params := LoadgenJobParams{
+		Name:               "loadgen-nos3",
+		Namespace:          "accelbench",
+		InferencePerfImage: "quay.io/inference-perf/inference-perf:v0.2.0",
+		ConfigMapName:      "loadgen-config-nos3",
+		ResultsS3Bucket:    "", // No S3
+	}
+
+	out, err := RenderLoadgenJob(params)
+	if err != nil {
+		t.Fatalf("RenderLoadgenJob: %v", err)
+	}
+
+	// Should NOT contain S3 sidecar when no bucket specified
+	if strings.Contains(out, "s3-upload") {
+		t.Error("output should not contain s3-upload sidecar when no S3 bucket")
+	}
+
+	// Should still contain main inference-perf container
+	if !strings.Contains(out, "inference-perf") {
+		t.Error("output missing inference-perf container")
+	}
+}
+
+func TestRenderInferencePerfConfig(t *testing.T) {
+	params := InferencePerfConfigParams{
+		ModelHfID:    "meta-llama/Llama-3.1-8B-Instruct",
+		TargetHost:   "bench-test123",
+		TargetPort:   8000,
+		Streaming:    true,
+		DatasetType:  "synthetic",
+		InputMean:    256,
+		InputStdDev:  64,
+		InputMin:     128,
+		InputMax:     512,
+		OutputMean:   128,
+		OutputStdDev: 32,
+		OutputMin:    64,
+		OutputMax:    256,
+		LoadType:     "constant",
+		Stages:       []LoadStage{{Rate: 5, Duration: 120}},
+		NumWorkers:   4,
+	}
+
+	out, err := RenderInferencePerfConfig(params)
+	if err != nil {
+		t.Fatalf("RenderInferencePerfConfig: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		want string
+	}{
+		{"server type", "type: vllm"},
+		{"model name", "model_name: meta-llama/Llama-3.1-8B-Instruct"},
+		{"base url", "base_url: http://bench-test123:8000"},
+		{"ignore_eos", "ignore_eos: true"},
+		{"tokenizer", "pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct"},
+		{"api type", "type: completion"},
+		{"streaming", "streaming: true"},
+		{"data type", "type: synthetic"},
+		{"input mean", "mean: 256"},
+		{"output mean", "mean: 128"},
+		{"load type", "type: constant"},
+		{"rate", "rate: 5"},
+		{"duration", "duration: 120"},
+		{"workers", "num_workers: 4"},
+		{"storage path", "path: /tmp/results"},
+	}
+
+	for _, c := range checks {
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%s: output does not contain %q", c.name, c.want)
+		}
+	}
+}
+
+func TestRenderInferencePerfConfig_MultiStage(t *testing.T) {
+	params := InferencePerfConfigParams{
+		ModelHfID:    "test/model",
+		TargetHost:   "bench-test",
+		TargetPort:   8000,
+		Streaming:    true,
+		DatasetType:  "synthetic",
+		InputMean:    256,
+		InputStdDev:  64,
+		InputMin:     128,
+		InputMax:     512,
+		OutputMean:   128,
+		OutputStdDev: 32,
+		OutputMin:    64,
+		OutputMax:    256,
+		LoadType:     "constant",
+		Stages: []LoadStage{
+			{Rate: 2, Duration: 60},
+			{Rate: 5, Duration: 60},
+			{Rate: 10, Duration: 60},
+			{Rate: 20, Duration: 60},
+		},
+		NumWorkers: 8,
+	}
+
+	out, err := RenderInferencePerfConfig(params)
+	if err != nil {
+		t.Fatalf("RenderInferencePerfConfig: %v", err)
+	}
+
+	// Verify all stages are present
+	checks := []string{"rate: 2", "rate: 5", "rate: 10", "rate: 20"}
+	for _, want := range checks {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q", want)
 		}
 	}
 }

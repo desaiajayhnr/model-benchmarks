@@ -116,6 +116,17 @@ func (m *MockRepo) UpdateRunStatus(_ context.Context, runID, status string) erro
 	return nil
 }
 
+func (m *MockRepo) UpdateLoadgenConfig(_ context.Context, runID, config string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	run.LoadgenConfig = &config
+	return nil
+}
+
 func (m *MockRepo) PersistMetrics(_ context.Context, runID string, bm *BenchmarkMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
