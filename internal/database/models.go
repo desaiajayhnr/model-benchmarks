@@ -40,6 +40,7 @@ type BenchmarkRun struct {
 	RunType               string     `json:"run_type"`
 	MinDurationSeconds    int        `json:"min_duration_seconds"`
 	MaxModelLen           int        `json:"max_model_len,omitempty"`
+	LoadgenConfig         *string    `json:"loadgen_config,omitempty"` // inference-perf YAML config
 	Status                string     `json:"status"`
 	Superseded            bool       `json:"superseded"`
 	StartedAt             *time.Time `json:"started_at,omitempty"`

@@ -14,6 +14,7 @@ type Repo interface {
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)
 	UpdateRunStatus(ctx context.Context, runID, status string) error
+	UpdateLoadgenConfig(ctx context.Context, runID, config string) error
 	PersistMetrics(ctx context.Context, runID string, m *BenchmarkMetrics) error
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
