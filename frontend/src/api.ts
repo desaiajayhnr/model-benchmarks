@@ -190,3 +190,8 @@ export async function getOOMHistory(
 export function getExportManifestUrl(runId: string): string {
   return `${BASE}/runs/${runId}/export`;
 }
+
+// Export HTML report (PRD-16)
+export function getExportReportUrl(runId: string): string {
+  return `${BASE}/runs/${runId}/report`;
+}

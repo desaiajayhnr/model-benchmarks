@@ -8,6 +8,7 @@ import (
 	"text/template"
 
 	"github.com/accelbench/accelbench/internal/database"
+	"github.com/accelbench/accelbench/internal/report"
 )
 
 // handleExportManifest generates a Kubernetes manifest YAML for deploying
@@ -310,3 +311,59 @@ spec:
   selector:
     app.kubernetes.io/name: {{ .Name }}
 `))
+
+// handleExportReport generates a self-contained HTML report for a benchmark run.
+func (s *Server) handleExportReport(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("id")
+
+	// Get the benchmark run.
+	run, err := s.repo.GetBenchmarkRun(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if run == nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if run.Status != "completed" {
+		writeError(w, http.StatusBadRequest, "can only export completed runs")
+		return
+	}
+
+	// Get metrics.
+	metrics, err := s.repo.GetMetricsByRunID(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query metrics failed")
+		return
+	}
+	if metrics == nil {
+		writeError(w, http.StatusNotFound, "metrics not found")
+		return
+	}
+
+	// Get export details.
+	details, err := s.repo.GetRunExportDetails(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query export details failed")
+		return
+	}
+	if details == nil {
+		writeError(w, http.StatusNotFound, "run details not found")
+		return
+	}
+
+	// Generate the HTML report.
+	html, err := report.GenerateRunReport(run, metrics, details)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("generate report failed: %v", err))
+		return
+	}
+
+	// Return as downloadable HTML file.
+	filename := fmt.Sprintf("accelbench-report-%s-%s.html", sanitizeFilename(details.ModelHfID), runID[:8])
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	w.Write(html)
+}

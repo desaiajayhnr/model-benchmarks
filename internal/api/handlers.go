@@ -79,6 +79,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
 	// Export Kubernetes manifest
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
+	// Export HTML report (PRD-16)
+	mux.HandleFunc("GET /api/v1/runs/{id}/report", s.handleExportReport)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
