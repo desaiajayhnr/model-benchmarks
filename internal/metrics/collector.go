@@ -17,24 +17,42 @@ type LoadgenOutput struct {
 }
 
 // RequestResult holds per-request measurements from the load generator.
+// Supports both legacy AccelBench loadgen and inference-perf output formats.
 type RequestResult struct {
 	TTFTMs          float64 `json:"ttft_ms"`
 	E2ELatencyMs    float64 `json:"e2e_latency_ms"`
-	ITLMs           float64 `json:"itl_ms"`
+	ITLMs           float64 `json:"itl_ms"`            // legacy loadgen
+	TPOTMs          float64 `json:"tpot_ms"`           // inference-perf (time per output token)
 	OutputTokens    int     `json:"output_tokens"`
 	InputTokens     int     `json:"input_tokens"`
 	DurationSeconds float64 `json:"duration_seconds"`
 	Success         bool    `json:"success"`
+
+	// Extended latency breakdown (PRD-14)
+	TPOTMs        float64 `json:"tpot_ms"`
+	PrefillTimeMs float64 `json:"prefill_time_ms"`
+	DecodeTimeMs  float64 `json:"decode_time_ms"`
+	QueueTimeMs   float64 `json:"queue_time_ms"`
 }
 
 // Summary holds aggregate metrics from the load generator.
+// Supports both legacy AccelBench loadgen and inference-perf output formats.
 type Summary struct {
-	TotalDurationSeconds      float64  `json:"total_duration_seconds"`
-	TotalRequests             int      `json:"total_requests"`
-	SuccessfulRequests        int      `json:"successful_requests"`
-	FailedRequests            int      `json:"failed_requests"`
-	ThroughputAggregateTPS    float64  `json:"throughput_aggregate_tps"`
-	RequestsPerSecond         float64  `json:"requests_per_second"`
+	// Legacy loadgen fields
+	TotalDurationSeconds   float64 `json:"total_duration_seconds"`
+	ThroughputAggregateTPS float64 `json:"throughput_aggregate_tps"`
+
+	// inference-perf fields
+	TotalDurationS float64 `json:"total_duration_s"`
+	ThroughputTPS  float64 `json:"throughput_tps"`
+
+	// Common fields
+	TotalRequests      int     `json:"total_requests"`
+	SuccessfulRequests int     `json:"successful_requests"`
+	FailedRequests     int     `json:"failed_requests"`
+	RequestsPerSecond  float64 `json:"requests_per_second"`
+
+	// Optional accelerator metrics (from legacy loadgen)
 	AcceleratorUtilizationPct *float64 `json:"accelerator_utilization_pct,omitempty"`
 	AcceleratorMemoryPeakGiB  *float64 `json:"accelerator_memory_peak_gib,omitempty"`
 }
@@ -79,21 +97,48 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 
 // ComputeMetrics takes parsed loadgen output and computes the full set of
 // benchmark metrics including p50/p90/p95/p99 percentiles.
+// Supports both legacy AccelBench loadgen and inference-perf output formats.
 func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 	successful := filterSuccessful(out.Requests)
 
 	var ttfts, e2es, itls []float64
+	var tpots, prefills, decodes, queues []float64
 	var totalOutputTokens int
 	for _, r := range successful {
 		ttfts = append(ttfts, r.TTFTMs)
 		e2es = append(e2es, r.E2ELatencyMs)
-		itls = append(itls, r.ITLMs)
+		// Use ITL if available, otherwise use TPOT (inference-perf)
+		itl := r.ITLMs
+		if itl == 0 && r.TPOTMs > 0 {
+			itl = r.TPOTMs
+		}
+		itls = append(itls, itl)
 		totalOutputTokens += r.OutputTokens
+
+		// Extended latency breakdown (only include if > 0)
+		if r.TPOTMs > 0 {
+			tpots = append(tpots, r.TPOTMs)
+		}
+		if r.PrefillTimeMs > 0 {
+			prefills = append(prefills, r.PrefillTimeMs)
+		}
+		if r.DecodeTimeMs > 0 {
+			decodes = append(decodes, r.DecodeTimeMs)
+		}
+		if r.QueueTimeMs > 0 {
+			queues = append(queues, r.QueueTimeMs)
+		}
 	}
 
 	ttftP50, ttftP90, ttftP95, ttftP99 := percentiles(ttfts)
 	e2eP50, e2eP90, e2eP95, e2eP99 := percentiles(e2es)
 	itlP50, itlP90, itlP95, itlP99 := percentiles(itls)
+
+	// Extended latency percentiles
+	tpotP50, tpotP90, _, tpotP99 := percentiles(tpots)
+	prefillP50, _, _, _ := percentiles(prefills)
+	decodeP50, _, _, _ := percentiles(decodes)
+	queueP50, _, _, _ := percentiles(queues)
 
 	// Per-request throughput: average output tokens / average duration.
 	var throughputPerRequest *float64
@@ -106,28 +151,47 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 		}
 	}
 
-	aggTPS := &out.Summary.ThroughputAggregateTPS
+	// Handle both field naming conventions for aggregate TPS
+	aggTPSVal := out.Summary.ThroughputAggregateTPS
+	if aggTPSVal == 0 {
+		aggTPSVal = out.Summary.ThroughputTPS // inference-perf field
+	}
+	aggTPS := &aggTPSVal
+
 	rps := &out.Summary.RequestsPerSecond
-	dur := &out.Summary.TotalDurationSeconds
+
+	// Handle both field naming conventions for duration
+	durVal := out.Summary.TotalDurationSeconds
+	if durVal == 0 {
+		durVal = out.Summary.TotalDurationS // inference-perf field
+	}
+	dur := &durVal
+
 	successCount := out.Summary.SuccessfulRequests
 	failCount := out.Summary.FailedRequests
 
 	return &database.BenchmarkMetrics{
-		TTFTP50Ms:                 ttftP50,
-		TTFTP90Ms:                 ttftP90,
-		TTFTP95Ms:                 ttftP95,
-		TTFTP99Ms:                 ttftP99,
-		E2ELatencyP50Ms:           e2eP50,
-		E2ELatencyP90Ms:           e2eP90,
-		E2ELatencyP95Ms:           e2eP95,
-		E2ELatencyP99Ms:           e2eP99,
-		ITLP50Ms:                  itlP50,
-		ITLP90Ms:                  itlP90,
-		ITLP95Ms:                  itlP95,
-		ITLP99Ms:                  itlP99,
-		ThroughputPerRequestTPS:   throughputPerRequest,
-		ThroughputAggregateTPS:    aggTPS,
-		RequestsPerSecond:         rps,
+		TTFTP50Ms:               ttftP50,
+		TTFTP90Ms:               ttftP90,
+		TTFTP95Ms:               ttftP95,
+		TTFTP99Ms:               ttftP99,
+		E2ELatencyP50Ms:         e2eP50,
+		E2ELatencyP90Ms:         e2eP90,
+		E2ELatencyP95Ms:         e2eP95,
+		E2ELatencyP99Ms:         e2eP99,
+		ITLP50Ms:                itlP50,
+		ITLP90Ms:                itlP90,
+		ITLP95Ms:                itlP95,
+		ITLP99Ms:                itlP99,
+		TPOTP50Ms:               tpotP50,
+		TPOTP90Ms:               tpotP90,
+		TPOTP99Ms:               tpotP99,
+		PrefillTimeP50Ms:        prefillP50,
+		DecodeTimeP50Ms:         decodeP50,
+		QueueTimeP50Ms:          queueP50,
+		ThroughputPerRequestTPS: throughputPerRequest,
+		ThroughputAggregateTPS:  aggTPS,
+		RequestsPerSecond:       rps,
 		AcceleratorUtilizationPct: out.Summary.AcceleratorUtilizationPct,
 		AcceleratorMemoryPeakGiB:  out.Summary.AcceleratorMemoryPeakGiB,
 		SuccessfulRequests:        &successCount,

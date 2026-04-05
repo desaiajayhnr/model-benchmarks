@@ -29,39 +29,61 @@ spec:
                     values:
                       - system
       containers:
-        - name: loadgen
-          image: {{ .LoadgenImage }}
-          env:
-            - name: PYTHONUNBUFFERED
-              value: "1"
-            - name: TARGET_URL
-              value: "http://{{ .TargetHost }}:{{ .TargetPort }}/v1/completions"
-            - name: MODEL_ID
-              value: "{{ .ModelHfID }}"
-            - name: CONCURRENCY
-              value: "{{ .Concurrency }}"
-            - name: INPUT_SEQ_LEN
-              value: "{{ .InputSequenceLength }}"
-            - name: OUTPUT_SEQ_LEN
-              value: "{{ .OutputSequenceLength }}"
-            - name: DATASET
-              value: "{{ .DatasetName }}"
-            - name: NUM_REQUESTS
-              value: "{{ .NumRequests }}"
-            - name: WARMUP_REQUESTS
-              value: "{{ .WarmupRequests }}"
-            - name: MIN_DURATION_SECONDS
-              value: "{{ .MinDurationSeconds }}"
-{{- if .ResultsS3Bucket }}
-            - name: RESULTS_S3_BUCKET
-              value: "{{ .ResultsS3Bucket }}"
-            - name: RESULTS_S3_KEY
-              value: "{{ .ResultsS3Key }}"
-{{- end }}
+        # Main benchmark container - official inference-perf image
+        - name: inference-perf
+          image: {{ .InferencePerfImage }}
+          args: ["--config_file", "/workspace/config.yml"]
+          volumeMounts:
+            - name: config
+              mountPath: /workspace/config.yml
+              subPath: config.yml
+            - name: results
+              mountPath: /tmp/results
           resources:
             requests:
-              cpu: "500m"
-              memory: "1Gi"
-            limits:
               cpu: "2"
               memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+{{- if .ResultsS3Bucket }}
+        # Sidecar for S3 upload - waits for results, uploads, exits
+        - name: s3-upload
+          image: amazon/aws-cli:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Waiting for benchmark to complete..."
+              # Wait for inference-perf to write results (check for any JSON file)
+              while [ -z "$(ls /tmp/results/*.json 2>/dev/null)" ]; do
+                sleep 5
+              done
+              # Give it a moment to finish writing
+              sleep 2
+              echo "Uploading results to S3..."
+              # Find and upload the results file
+              for f in /tmp/results/*.json; do
+                aws s3 cp "$f" "s3://{{ .ResultsS3Bucket }}/{{ .ResultsS3Key }}"
+                echo "Uploaded $f to s3://{{ .ResultsS3Bucket }}/{{ .ResultsS3Key }}"
+              done
+              echo "Upload complete"
+          volumeMounts:
+            - name: results
+              mountPath: /tmp/results
+          env:
+            - name: AWS_REGION
+              value: "{{ .AWSRegion }}"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+{{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ .ConfigMapName }}
+        - name: results
+          emptyDir: {}

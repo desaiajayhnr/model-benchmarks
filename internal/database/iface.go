@@ -14,6 +14,7 @@ type Repo interface {
 	GetInstanceTypeByName(ctx context.Context, name string) (*InstanceType, error)
 	CreateBenchmarkRun(ctx context.Context, run *BenchmarkRun) (string, error)
 	UpdateRunStatus(ctx context.Context, runID, status string) error
+	UpdateLoadgenConfig(ctx context.Context, runID, config string) error
 	PersistMetrics(ctx context.Context, runID string, m *BenchmarkMetrics) error
 	GetBenchmarkRun(ctx context.Context, runID string) (*BenchmarkRun, error)
 	GetMetricsByRunID(ctx context.Context, runID string) (*BenchmarkMetrics, error)
@@ -27,6 +28,8 @@ type Repo interface {
 	ListInstanceTypes(ctx context.Context) ([]InstanceType, error)
 	// OOM event tracking
 	OOMRepo
+	// Test suite operations
+	TestSuiteRepo
 }
 
 // OOMRepo defines the interface for OOM event operations.
@@ -60,6 +63,17 @@ type OOMHistory struct {
 	InstanceType string
 	Events       []OOMEvent
 	TotalCount   int
+}
+
+// TestSuiteRepo defines the interface for test suite operations.
+type TestSuiteRepo interface {
+	CreateTestSuiteRun(ctx context.Context, run *TestSuiteRun) (string, error)
+	GetTestSuiteRun(ctx context.Context, id string) (*TestSuiteRun, error)
+	UpdateSuiteRunStatus(ctx context.Context, id, status string, currentScenario *string) error
+	CreateScenarioResult(ctx context.Context, result *ScenarioResult) (string, error)
+	UpdateScenarioResult(ctx context.Context, result *ScenarioResult) error
+	GetScenarioResults(ctx context.Context, suiteRunID string) ([]ScenarioResult, error)
+	ListTestSuiteRuns(ctx context.Context, modelID, instanceTypeID string) ([]TestSuiteRun, error)
 }
 
 // Compile-time check that *Repository implements Repo.

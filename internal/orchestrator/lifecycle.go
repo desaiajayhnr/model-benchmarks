@@ -16,6 +16,7 @@ import (
 	"github.com/accelbench/accelbench/internal/manifest"
 	"github.com/accelbench/accelbench/internal/metrics"
 	"github.com/accelbench/accelbench/internal/oom"
+	"github.com/accelbench/accelbench/internal/scenario"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -93,6 +94,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	ns := defaultNamespace
 	modelName := fmt.Sprintf("bench-%s", cfg.RunID[:8])
 	loadgenName := fmt.Sprintf("loadgen-%s", cfg.RunID[:8])
+	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
 
 	// Phase 1: Mark run as running.
 	if err := o.repo.UpdateRunStatus(ctx, cfg.RunID, "running"); err != nil {
@@ -100,7 +102,7 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	}
 
 	// Ensure teardown happens regardless of outcome.
-	defer o.teardown(context.Background(), ns, modelName, loadgenName)
+	defer o.teardown(context.Background(), ns, modelName, loadgenName, configMapName)
 
 	// Phase 2: Deploy model Deployment + Service.
 	log.Printf("[%s] deploying model %s on %s", cfg.RunID[:8], cfg.Request.ModelHfID, cfg.Request.InstanceTypeName)
@@ -181,6 +183,16 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 		computed.AcceleratorUtilizationAvgPct = &gpuMetrics.UtilizationAvgPct
 		computed.AcceleratorMemoryPeakGiB = &gpuMetrics.MemoryPeakGiB
 		computed.WaitingRequestsMax = &gpuMetrics.WaitingRequestsMax
+
+		// Extended metrics (PRD-14)
+		computed.PromptThroughputTPS = &gpuMetrics.PromptThroughputTPS
+		computed.GenerationThroughputTPS = &gpuMetrics.GenerationThroughputTPS
+		computed.KVCacheUtilizationAvgPct = &gpuMetrics.KVCacheUtilizationAvgPct
+		computed.KVCacheUtilizationPeakPct = &gpuMetrics.KVCacheUtilizationPeakPct
+		computed.PrefixCacheHitRate = &gpuMetrics.PrefixCacheHitRate
+		computed.PreemptionCount = &gpuMetrics.PreemptionCount
+		computed.RunningRequestsAvg = &gpuMetrics.RunningRequestsAvg
+		computed.RunningRequestsMax = &gpuMetrics.RunningRequestsMax
 	}
 
 	if err := o.repo.PersistMetrics(ctx, cfg.RunID, computed); err != nil {
@@ -265,39 +277,122 @@ func (o *Orchestrator) waitForReady(ctx context.Context, ns, name string, cfg Ru
 }
 
 func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc string, cfg RunConfig) error {
-	numRequests := 200
-	if cfg.Request.Concurrency > 32 {
-		numRequests = cfg.Request.Concurrency * 10
+	configMapName := fmt.Sprintf("loadgen-config-%s", cfg.RunID[:8])
+
+	// Build inference-perf config from scenario or compute defaults
+	var inferencePerfConfig manifest.InferencePerfConfigParams
+
+	if cfg.Request.ScenarioID != "" {
+		// Use predefined scenario
+		s := scenario.Get(cfg.Request.ScenarioID)
+		if s == nil {
+			return fmt.Errorf("unknown scenario: %s", cfg.Request.ScenarioID)
+		}
+		inferencePerfConfig = s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
+		log.Printf("[%s] using scenario %q: %s", cfg.RunID[:8], s.ID, s.Name)
+	} else {
+		// Fall back to computed defaults based on request parameters
+		inputMean := cfg.Request.InputSequenceLength
+		if inputMean == 0 {
+			inputMean = 256
+		}
+		outputMean := cfg.Request.OutputSequenceLength
+		if outputMean == 0 {
+			outputMean = 128
+		}
+
+		// Calculate distribution bounds (std_dev = mean/4, min = mean/2, max = mean*2)
+		inputStdDev := inputMean / 4
+		inputMin := inputMean / 2
+		inputMax := inputMean * 2
+		outputStdDev := outputMean / 4
+		outputMin := outputMean / 2
+		outputMax := outputMean * 2
+
+		// Duration from request or default 120 seconds
+		duration := cfg.Request.MinDurationSeconds
+		if duration == 0 {
+			duration = 120
+		}
+
+		// Workers based on concurrency
+		numWorkers := cfg.Request.Concurrency
+		if numWorkers < 4 {
+			numWorkers = 4
+		}
+		if numWorkers > 8 {
+			numWorkers = 8
+		}
+
+		// Calculate QPS from concurrency
+		qps := cfg.Request.Concurrency / 2
+		if qps < 1 {
+			qps = 1
+		}
+		if qps > 50 {
+			qps = 50
+		}
+
+		inferencePerfConfig = manifest.InferencePerfConfigParams{
+			ModelHfID:    cfg.Request.ModelHfID,
+			TargetHost:   modelSvc,
+			TargetPort:   8000,
+			Streaming:    true,
+			DatasetType:  "synthetic",
+			InputMean:    inputMean,
+			InputStdDev:  inputStdDev,
+			InputMin:     inputMin,
+			InputMax:     inputMax,
+			OutputMean:   outputMean,
+			OutputStdDev: outputStdDev,
+			OutputMin:    outputMin,
+			OutputMax:    outputMax,
+			LoadType:     "constant",
+			Stages:       []manifest.LoadStage{{Rate: qps, Duration: duration}},
+			NumWorkers:   numWorkers,
+		}
 	}
 
-	loadgenImage := os.Getenv("LOADGEN_IMAGE")
-	if loadgenImage == "" {
-		loadgenImage = "ghcr.io/accelbench/loadgen:latest"
+	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)
+	if err != nil {
+		return fmt.Errorf("render inference-perf config: %w", err)
+	}
+
+	// Store the config in the database for reproducibility
+	if err := o.repo.UpdateLoadgenConfig(ctx, cfg.RunID, configYAML); err != nil {
+		log.Printf("[%s] warning: failed to save loadgen config: %v", cfg.RunID[:8], err)
+		// Non-fatal - continue with the benchmark
+	}
+
+	// Create ConfigMap with inference-perf config
+	if err := o.createConfigMap(ctx, ns, configMapName, "config.yml", configYAML); err != nil {
+		return fmt.Errorf("create configmap: %w", err)
+	}
+
+	inferencePerfImage := os.Getenv("INFERENCE_PERF_IMAGE")
+	if inferencePerfImage == "" {
+		inferencePerfImage = "quay.io/inference-perf/inference-perf:v0.2.0"
 	}
 
 	// Use S3 for results to avoid container log truncation
 	resultsBucket := os.Getenv("RESULTS_S3_BUCKET")
 	resultsKey := ""
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		awsRegion = "us-east-2"
+	}
 	if resultsBucket != "" {
 		resultsKey = fmt.Sprintf("results/%s.json", cfg.RunID)
 	}
 
 	yamlStr, err := manifest.RenderLoadgenJob(manifest.LoadgenJobParams{
-		Name:                 name,
-		Namespace:            ns,
-		LoadgenImage:         loadgenImage,
-		TargetHost:           modelSvc,
-		TargetPort:           8000,
-		ModelHfID:            cfg.Request.ModelHfID,
-		Concurrency:          cfg.Request.Concurrency,
-		InputSequenceLength:  cfg.Request.InputSequenceLength,
-		OutputSequenceLength: cfg.Request.OutputSequenceLength,
-		DatasetName:          cfg.Request.DatasetName,
-		NumRequests:          numRequests,
-		WarmupRequests:       10,
-		MinDurationSeconds:   cfg.Request.MinDurationSeconds,
-		ResultsS3Bucket:      resultsBucket,
-		ResultsS3Key:         resultsKey,
+		Name:               name,
+		Namespace:          ns,
+		InferencePerfImage: inferencePerfImage,
+		ConfigMapName:      configMapName,
+		ResultsS3Bucket:    resultsBucket,
+		ResultsS3Key:       resultsKey,
+		AWSRegion:          awsRegion,
 	})
 	if err != nil {
 		return err
@@ -370,7 +465,7 @@ func (o *Orchestrator) readJobLogs(ctx context.Context, ns, jobName string) ([]b
 	}
 
 	req := o.client.CoreV1().Pods(ns).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{
-		Container: "loadgen",
+		Container: "inference-perf",
 	})
 	stream, err := req.Stream(ctx)
 	if err != nil {
@@ -385,8 +480,8 @@ func (o *Orchestrator) readJobLogs(ctx context.Context, ns, jobName string) ([]b
 	return buf.Bytes(), nil
 }
 
-func (o *Orchestrator) teardown(ctx context.Context, ns, modelName, loadgenName string) {
-	log.Printf("tearing down resources: %s, %s", modelName, loadgenName)
+func (o *Orchestrator) teardown(ctx context.Context, ns, modelName, loadgenName, configMapName string) {
+	log.Printf("tearing down resources: %s, %s, %s", modelName, loadgenName, configMapName)
 	propagation := metav1.DeletePropagationBackground
 
 	_ = o.client.BatchV1().Jobs(ns).Delete(ctx, loadgenName, metav1.DeleteOptions{
@@ -396,6 +491,29 @@ func (o *Orchestrator) teardown(ctx context.Context, ns, modelName, loadgenName 
 	_ = o.client.AppsV1().Deployments(ns).Delete(ctx, modelName, metav1.DeleteOptions{
 		PropagationPolicy: &propagation,
 	})
+	// Delete the inference-perf config ConfigMap
+	if configMapName != "" {
+		_ = o.client.CoreV1().ConfigMaps(ns).Delete(ctx, configMapName, metav1.DeleteOptions{})
+	}
+}
+
+// createConfigMap creates a ConfigMap with the given data.
+func (o *Orchestrator) createConfigMap(ctx context.Context, ns, name, key, data string) error {
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/component": "loadgen-config",
+				"accelbench/role":             "loadgen-config",
+			},
+		},
+		Data: map[string]string{
+			key: data,
+		},
+	}
+	_, err := o.client.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
+	return err
 }
 
 func (o *Orchestrator) markFailed(ctx context.Context, runID string) {
@@ -556,7 +674,8 @@ func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
 	ns := defaultNamespace
 	modelName := fmt.Sprintf("bench-%s", runID[:8])
 	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
-	o.teardown(ctx, ns, modelName, loadgenName)
+	configMapName := fmt.Sprintf("loadgen-config-%s", runID[:8])
+	o.teardown(ctx, ns, modelName, loadgenName, configMapName)
 }
 
 // recordOOMEvent saves an OOM event to the database.

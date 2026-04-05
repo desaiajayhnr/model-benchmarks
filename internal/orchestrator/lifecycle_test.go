@@ -193,8 +193,8 @@ func TestTeardown(t *testing.T) {
 	o.deployModel(ctx, "default", "bench-12345678", cfg)
 	o.launchLoadgen(ctx, "default", "loadgen-12345678", "bench-12345678", cfg)
 
-	// Teardown.
-	o.teardown(ctx, "default", "bench-12345678", "loadgen-12345678")
+	// Teardown (now includes configMapName).
+	o.teardown(ctx, "default", "bench-12345678", "loadgen-12345678", "loadgen-config-12345678")
 
 	// Verify deployment deleted.
 	deps, _ := client.AppsV1().Deployments("default").List(ctx, metav1.ListOptions{})
@@ -206,6 +206,12 @@ func TestTeardown(t *testing.T) {
 	jobs, _ := client.BatchV1().Jobs("default").List(ctx, metav1.ListOptions{})
 	if len(jobs.Items) != 0 {
 		t.Errorf("expected 0 jobs after teardown, got %d", len(jobs.Items))
+	}
+
+	// Verify configmap deleted.
+	cms, _ := client.CoreV1().ConfigMaps("default").List(ctx, metav1.ListOptions{})
+	if len(cms.Items) != 0 {
+		t.Errorf("expected 0 configmaps after teardown, got %d", len(cms.Items))
 	}
 }
 
