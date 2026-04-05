@@ -81,12 +81,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/oom-history", s.handleOOMHistory)
 	// Export Kubernetes manifest
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
-	// Scenarios
-	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
-	// Test Suites
-	mux.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
-	mux.HandleFunc("POST /api/v1/test-suites/run", s.handleCreateSuiteRun)
-	mux.HandleFunc("GET /api/v1/test-suites/runs/{id}", s.handleGetSuiteRun)
+	// Export HTML report (PRD-16)
+	mux.HandleFunc("GET /api/v1/runs/{id}/report", s.handleExportReport)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

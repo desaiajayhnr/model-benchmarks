@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ .Title }}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      color: #1f2937;
+      background: #f9fafb;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem;
+      background: white;
+      min-height: 100vh;
+    }
+    .header {
+      border-bottom: 2px solid #2563eb;
+      padding-bottom: 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .header h1 {
+      font-size: 1.875rem;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 0.5rem;
+    }
+    .header-meta {
+      color: #6b7280;
+      font-size: 0.875rem;
+    }
+    .header-meta span {
+      margin-right: 1.5rem;
+    }
+    .section {
+      margin-bottom: 2rem;
+    }
+    .section h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem;
+    }
+    .config-item dt {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #6b7280;
+      margin-bottom: 0.25rem;
+    }
+    .config-item dd {
+      font-weight: 500;
+      color: #111827;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1rem;
+    }
+    .metric-card {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      text-align: center;
+    }
+    .metric-value {
+      font-size: 1.875rem;
+      font-weight: 700;
+      color: #111827;
+      line-height: 1.2;
+    }
+    .metric-unit {
+      font-size: 1rem;
+      font-weight: 400;
+      color: #6b7280;
+    }
+    .metric-label {
+      font-size: 0.875rem;
+      color: #6b7280;
+      margin-top: 0.25rem;
+    }
+    .chart-container {
+      height: 350px;
+      margin: 1rem 0;
+      position: relative;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    .stats-card {
+      background: #f0f9ff;
+      border: 1px solid #bae6fd;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      text-align: center;
+    }
+    .stats-card.success {
+      background: #f0fdf4;
+      border-color: #86efac;
+    }
+    .stats-card.failed {
+      background: #fef2f2;
+      border-color: #fecaca;
+    }
+    .footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #e5e7eb;
+      text-align: center;
+      color: #9ca3af;
+      font-size: 0.875rem;
+    }
+    .footer a {
+      color: #2563eb;
+      text-decoration: none;
+    }
+    .footer a:hover {
+      text-decoration: underline;
+    }
+    @media print {
+      body { background: white; }
+      .container { padding: 1rem; }
+      .chart-container { page-break-inside: avoid; }
+    }
+    @media (max-width: 640px) {
+      .container { padding: 1rem; }
+      .metric-grid { grid-template-columns: repeat(2, 1fr); }
+      .stats-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>{{ .ModelName }}</h1>
+      <div class="header-meta">
+        <span><strong>Instance:</strong> {{ .InstanceType }}</span>
+        <span><strong>Generated:</strong> {{ .Timestamp }}</span>
+      </div>
+    </header>
+
+    <section class="section">
+      <h2>Configuration</h2>
+      <dl class="config-grid">
+        <div class="config-item">
+          <dt>Framework</dt>
+          <dd>{{ .Config.Framework }} {{ .Config.FrameworkVersion }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Tensor Parallel</dt>
+          <dd>{{ .Config.TensorParallel }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Quantization</dt>
+          <dd>{{ .Config.Quantization }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Max Context Length</dt>
+          <dd>{{ .Config.MaxModelLen }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Concurrency</dt>
+          <dd>{{ .Config.Concurrency }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Input / Output Tokens</dt>
+          <dd>{{ .Config.InputSequenceLength }} / {{ .Config.OutputSequenceLength }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Dataset</dt>
+          <dd>{{ .Config.DatasetName }}</dd>
+        </div>
+        <div class="config-item">
+          <dt>Run Type</dt>
+          <dd>{{ .Config.RunType }}</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="section">
+      <h2>Performance Metrics</h2>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.TTFTP50Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">TTFT p50</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.TTFTP99Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">TTFT p99</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP50Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">E2E Latency p50</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.E2ELatencyP99Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">E2E Latency p99</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.ITLP50Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">ITL p50</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.ITLP99Ms }}<span class="metric-unit">ms</span></div>
+          <div class="metric-label">ITL p99</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.ThroughputAggregateTPS }}<span class="metric-unit">tok/s</span></div>
+          <div class="metric-label">Throughput</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.RequestsPerSecond }}<span class="metric-unit">rps</span></div>
+          <div class="metric-label">Requests/sec</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Latency Distribution</h2>
+      <div class="chart-container">
+        <canvas id="latencyChart"></canvas>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Resource Utilization</h2>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationPct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">GPU Utilization (Peak)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorUtilizationAvgPct }}<span class="metric-unit">%</span></div>
+          <div class="metric-label">GPU Utilization (Avg)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatFloat .Metrics.AcceleratorMemoryPeakGiB }}<span class="metric-unit">GiB</span></div>
+          <div class="metric-label">Memory (Peak)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">{{ formatInt .Metrics.WaitingRequestsMax }}</div>
+          <div class="metric-label">Max Waiting Requests</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Request Statistics</h2>
+      <div class="stats-grid">
+        <div class="stats-card success">
+          <div class="metric-value">{{ formatInt .Metrics.SuccessfulRequests }}</div>
+          <div class="metric-label">Successful Requests</div>
+        </div>
+        <div class="stats-card failed">
+          <div class="metric-value">{{ formatInt .Metrics.FailedRequests }}</div>
+          <div class="metric-label">Failed Requests</div>
+        </div>
+        <div class="stats-card">
+          <div class="metric-value">{{ formatFloat .Metrics.TotalDurationSeconds }}<span class="metric-unit">s</span></div>
+          <div class="metric-label">Total Duration</div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <p>Generated by <a href="https://github.com/accelbench/accelbench">AccelBench</a></p>
+    </footer>
+  </div>
+
+  <script>
+    const ctx = document.getElementById('latencyChart').getContext('2d');
+    new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: ['TTFT', 'E2E Latency', 'ITL'],
+        datasets: [
+          {
+            label: 'p50',
+            data: {{ toJSON .LatencyP50 }},
+            backgroundColor: '#2563eb',
+            borderRadius: 4
+          },
+          {
+            label: 'p90',
+            data: {{ toJSON .LatencyP90 }},
+            backgroundColor: '#60a5fa',
+            borderRadius: 4
+          },
+          {
+            label: 'p99',
+            data: {{ toJSON .LatencyP99 }},
+            backgroundColor: '#93c5fd',
+            borderRadius: 4
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: 'top',
+          },
+          title: {
+            display: false
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Latency (ms)'
+            }
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
