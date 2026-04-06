@@ -211,3 +211,68 @@ func (r *Repository) ListTestSuiteRuns(ctx context.Context, modelID, instanceTyp
 	}
 	return runs, nil
 }
+
+// SuiteRunListItem is a denormalized row for the suite runs list.
+type SuiteRunListItem struct {
+	ID               string     `json:"id"`
+	ModelHfID        string     `json:"model_hf_id"`
+	InstanceTypeName string     `json:"instance_type_name"`
+	SuiteID          string     `json:"suite_id"`
+	Status           string     `json:"status"`
+	CreatedAt        time.Time  `json:"created_at"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+}
+
+// ListSuiteRunsWithNames returns suite runs with model and instance names joined.
+func (r *Repository) ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			tsr.id, m.hf_id, it.name, tsr.suite_id, tsr.status,
+			tsr.created_at, tsr.started_at, tsr.completed_at
+		FROM test_suite_runs tsr
+		JOIN models m ON tsr.model_id = m.id
+		JOIN instance_types it ON tsr.instance_type_id = it.id
+		ORDER BY tsr.created_at DESC
+		LIMIT 100
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query suite runs: %w", err)
+	}
+	defer rows.Close()
+
+	var items []SuiteRunListItem
+	for rows.Next() {
+		var item SuiteRunListItem
+		err := rows.Scan(
+			&item.ID, &item.ModelHfID, &item.InstanceTypeName, &item.SuiteID,
+			&item.Status, &item.CreatedAt, &item.StartedAt, &item.CompletedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan suite run: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// DeleteSuiteRun removes a test suite run and its associated scenario results.
+func (r *Repository) DeleteSuiteRun(ctx context.Context, id string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `DELETE FROM scenario_results WHERE suite_run_id = $1`, id); err != nil {
+		return fmt.Errorf("delete scenario results: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM test_suite_runs WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete suite run: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}

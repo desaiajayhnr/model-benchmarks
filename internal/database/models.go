@@ -91,6 +91,7 @@ type BenchmarkMetrics struct {
 	PreemptionCount           *int     `json:"preemption_count,omitempty"`
 	RunningRequestsAvg        *float64 `json:"running_requests_avg,omitempty"`
 	RunningRequestsMax        *int     `json:"running_requests_max,omitempty"`
+	OutputLengthMean          *float64 `json:"output_length_mean,omitempty"`
 }
 
 type Pricing struct {
@@ -168,14 +169,15 @@ type ScenarioResult struct {
 
 // SuiteRunRequest represents the input parameters for starting a test suite run.
 type SuiteRunRequest struct {
-	ModelHfID            string  `json:"model_hf_id"`
-	ModelHfRevision      string  `json:"model_hf_revision"`
-	InstanceTypeName     string  `json:"instance_type_name"`
-	SuiteID              string  `json:"suite_id"`
-	Framework            string  `json:"framework"`
-	FrameworkVersion     string  `json:"framework_version"`
-	TensorParallelDegree int     `json:"tensor_parallel_degree"`
-	Quantization         *string `json:"quantization,omitempty"`
-	MaxModelLen          int     `json:"max_model_len,omitempty"`
-	HfToken              string  `json:"hf_token,omitempty"`
+	ModelHfID            string   `json:"model_hf_id"`
+	ModelHfRevision      string   `json:"model_hf_revision"`
+	InstanceTypeName     string   `json:"instance_type_name"`
+	SuiteID              string   `json:"suite_id,omitempty"`     // Predefined suite ID
+	ScenarioIDs          []string `json:"scenario_ids,omitempty"` // Custom scenario list (alternative to suite_id)
+	Framework            string   `json:"framework"`
+	FrameworkVersion     string   `json:"framework_version"`
+	TensorParallelDegree int      `json:"tensor_parallel_degree"`
+	Quantization         *string  `json:"quantization,omitempty"`
+	MaxModelLen          int      `json:"max_model_len,omitempty"`
+	HfToken              string   `json:"hf_token,omitempty"`
 }

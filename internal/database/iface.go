@@ -74,6 +74,8 @@ type TestSuiteRepo interface {
 	UpdateScenarioResult(ctx context.Context, result *ScenarioResult) error
 	GetScenarioResults(ctx context.Context, suiteRunID string) ([]ScenarioResult, error)
 	ListTestSuiteRuns(ctx context.Context, modelID, instanceTypeID string) ([]TestSuiteRun, error)
+	ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error)
+	DeleteSuiteRun(ctx context.Context, id string) error
 }
 
 // Compile-time check that *Repository implements Repo.

@@ -32,6 +32,7 @@ spec:
         # Main benchmark container - official inference-perf image
         - name: inference-perf
           image: {{ .InferencePerfImage }}
+          command: ["inference-perf"]
           args: ["--config_file", "/workspace/config.yml"]
           volumeMounts:
             - name: config

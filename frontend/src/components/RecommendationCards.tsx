@@ -47,9 +47,19 @@ function Card({ label, value, hint, tooltip }: CardProps) {
 export default function RecommendationCards({ recommendation }: Props) {
   const { model_info, instance_info } = recommendation;
 
-  const paramB = (model_info.parameter_count / 1e9).toFixed(1);
-  const modelSummary = `${model_info.architecture.toUpperCase()} ${paramB}B`;
-  const instanceSummary = `${instance_info.accelerator_count}x ${instance_info.accelerator_name}`;
+  // Defensive: bail out if required data is missing
+  if (!model_info || !instance_info) {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+        Error: Missing model_info or instance_info in recommendation
+      </div>
+    );
+  }
+
+  const paramB = ((model_info.parameter_count ?? 0) / 1e9).toFixed(1);
+  const arch = model_info.architecture || "unknown";
+  const modelSummary = `${arch.toUpperCase()} ${paramB}B`;
+  const instanceSummary = `${instance_info.accelerator_count ?? 0}x ${instance_info.accelerator_name ?? "unknown"}`;
 
   // Format context length nicely (e.g., 32768 -> "32K")
   const formatContext = (len: number) => {

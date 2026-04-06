@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createRun, getRecommendation, listInstanceTypes, getMemoryBreakdown, getOOMHistory } from "../api";
-import type { InstanceType, RecommendResponse, MemoryBreakdownResponse, OOMHistory } from "../types";
+import { createRun, createSuiteRun, getRecommendation, listInstanceTypes, listScenarios, listTestSuites, getMemoryBreakdown, getOOMHistory } from "../api";
+import type { InstanceType, RecommendResponse, MemoryBreakdownResponse, OOMHistory, Scenario, TestSuite } from "../types";
 import { validateToken } from "../hfApi";
 import type { HfModelDetail } from "../hfApi";
 import ModelCombobox from "../components/ModelCombobox";
@@ -9,6 +9,7 @@ import MemoryBreakdown from "../components/MemoryBreakdown";
 import OOMWarning from "../components/OOMWarning";
 import RecommendationCards from "../components/RecommendationCards";
 
+type RunMode = "single" | "suite";
 type TokenStatus = "idle" | "validating" | "valid" | "invalid";
 
 export default function Run() {
@@ -31,6 +32,14 @@ export default function Run() {
   const [memoryBreakdownLoading, setMemoryBreakdownLoading] = useState(false);
   const [oomHistory, setOOMHistory] = useState<OOMHistory | null>(null);
 
+
+  // PRD-12/13: Scenarios and test suites
+  const [runMode, setRunMode] = useState<RunMode>("single");
+  const [scenarios, setScenarios] = useState<Scenario[]>([]);
+  const [testSuites, setTestSuites] = useState<TestSuite[]>([]);
+  const [selectedScenario, setSelectedScenario] = useState<string>("chatbot");
+  const [selectedSuite, setSelectedSuite] = useState<string>("quick");
+
   // Initialize form with URL params (from Estimate page) or defaults
   const [form, setForm] = useState(() => {
     const instance = searchParams.get("instance") || "";
@@ -40,13 +49,12 @@ export default function Run() {
       model_hf_revision: "main",
       instance_type_name: instance,
       framework: isNeuron ? "vllm-neuron" : "vllm",
-      framework_version: "v0.7.3",
+      framework_version: "v0.19.0",
       tensor_parallel_degree: Number(searchParams.get("tp")) || 1,
       quantization: searchParams.get("quantization") || "",
       concurrency: Number(searchParams.get("concurrency")) || 16,
       input_sequence_length: Number(searchParams.get("input_seq")) || 512,
       output_sequence_length: Number(searchParams.get("output_seq")) || 256,
-      dataset_name: "sharegpt",
       max_model_len: Number(searchParams.get("max_model_len")) || 0,
       min_duration_seconds: 180,
       hf_token: searchParams.get("hf_token") || "",
@@ -58,9 +66,11 @@ export default function Run() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  // Load instance types on mount
+  // Load instance types, scenarios, and test suites on mount
   useEffect(() => {
     listInstanceTypes().then(setInstanceTypes).catch(() => {});
+    listScenarios().then(setScenarios).catch(() => {});
+    listTestSuites().then(setTestSuites).catch(() => {});
   }, []);
 
   // PRD-15: Auto-recommend when model and instance are both selected
@@ -273,15 +283,34 @@ export default function Run() {
     setError("");
     setSubmitting(true);
     try {
-      const res = await createRun({
-        ...form,
-        quantization: form.quantization || undefined,
-        max_model_len: form.max_model_len || undefined,
-        min_duration_seconds: form.min_duration_seconds || undefined,
-        hf_token: form.hf_token || undefined,
-        run_type: "on_demand",
-      });
-      navigate(`/results/${res.id}`);
+      if (runMode === "suite") {
+        // Create test suite run
+        const res = await createSuiteRun({
+          model_hf_id: form.model_hf_id,
+          model_hf_revision: form.model_hf_revision,
+          instance_type_name: form.instance_type_name,
+          suite_id: selectedSuite,
+          framework: form.framework,
+          framework_version: form.framework_version,
+          tensor_parallel_degree: form.tensor_parallel_degree,
+          quantization: form.quantization || undefined,
+          max_model_len: form.max_model_len || undefined,
+          hf_token: form.hf_token || undefined,
+        });
+        navigate(`/suite-runs/${res.id}`);
+      } else {
+        // Create single scenario run
+        const scenario = scenarios.find((s) => s.id === selectedScenario);
+        const res = await createRun({
+          ...form,
+          quantization: form.quantization || undefined,
+          max_model_len: form.max_model_len || undefined,
+          min_duration_seconds: scenario?.duration_seconds || form.min_duration_seconds || undefined,
+          hf_token: form.hf_token || undefined,
+          run_type: selectedScenario,
+        });
+        navigate(`/results/${res.id}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Submission failed");
     } finally {
@@ -427,6 +456,90 @@ export default function Run() {
           </div>
         </div>
 
+        {/* PRD-12/13: Run Mode and Scenario/Suite Selection */}
+        {scenarios.length > 0 && testSuites.length > 0 && (
+          <div className="border rounded-lg p-4 bg-gray-50">
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              Benchmark Type
+            </label>
+            <div className="flex gap-4 mb-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="runMode"
+                  value="single"
+                  checked={runMode === "single"}
+                  onChange={() => setRunMode("single")}
+                  className="h-4 w-4 text-blue-600"
+                />
+                <span className="text-sm font-medium">Single Scenario</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="runMode"
+                  value="suite"
+                  checked={runMode === "suite"}
+                  onChange={() => setRunMode("suite")}
+                  className="h-4 w-4 text-blue-600"
+                />
+                <span className="text-sm font-medium">Test Suite</span>
+              </label>
+            </div>
+
+            {runMode === "single" ? (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Scenario
+                </label>
+                <select
+                  value={selectedScenario}
+                  onChange={(e) => setSelectedScenario(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                >
+                  {scenarios.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({Math.round(s.duration_seconds / 60)}m)
+                    </option>
+                  ))}
+                </select>
+                {scenarios.find((s) => s.id === selectedScenario) && (
+                  <p className="mt-2 text-xs text-gray-500">
+                    {scenarios.find((s) => s.id === selectedScenario)?.description}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Test Suite
+                </label>
+                <select
+                  value={selectedSuite}
+                  onChange={(e) => setSelectedSuite(e.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                >
+                  {testSuites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({Math.round(s.total_duration_seconds / 60)}m total)
+                    </option>
+                  ))}
+                </select>
+                {testSuites.find((s) => s.id === selectedSuite) && (
+                  <div className="mt-2">
+                    <p className="text-xs text-gray-500 mb-1">
+                      {testSuites.find((s) => s.id === selectedSuite)?.description}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Scenarios: {testSuites.find((s) => s.id === selectedSuite)?.scenarios.join(", ")}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Auto-recommend status */}
         {suggesting && (
           <div className="flex items-center gap-2 text-sm text-gray-500">
@@ -442,15 +555,15 @@ export default function Run() {
         )}
 
         {/* PRD-15: OOM Warning */}
-        <OOMWarning history={oomHistory} />
+        {oomHistory && <OOMWarning history={oomHistory} />}
 
         {/* Recommendation Cards */}
-        {recommendation && recommendation.explanation.feasible && (
+        {recommendation?.explanation?.feasible && (
           <RecommendationCards recommendation={recommendation} />
         )}
 
         {/* Infeasibility warning with alternatives */}
-        {recommendation && !recommendation.explanation.feasible && (
+        {recommendation?.explanation && !recommendation.explanation.feasible && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm">
             <p className="font-medium text-amber-800 mb-2">
               Model does not fit on this instance
@@ -493,7 +606,7 @@ export default function Run() {
         )}
 
         {/* PRD-15: Memory Breakdown (always visible when recommendation exists) */}
-        {recommendation && recommendation.explanation.feasible && (
+        {recommendation?.explanation?.feasible && (
           <MemoryBreakdown breakdown={memoryBreakdown} loading={memoryBreakdownLoading} />
         )}
 
@@ -612,7 +725,7 @@ export default function Run() {
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Input Seq Length
@@ -641,17 +754,6 @@ export default function Run() {
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Dataset
-            </label>
-            <input
-              type="text"
-              value={form.dataset_name}
-              onChange={(e) => set("dataset_name", e.target.value)}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-            />
-          </div>
         </div>
 
         {error && (
@@ -665,7 +767,11 @@ export default function Run() {
           disabled={submitting}
           className="rounded-md bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
-          {submitting ? "Submitting..." : "Start Benchmark"}
+          {submitting
+            ? "Submitting..."
+            : runMode === "suite"
+            ? "Start Test Suite"
+            : "Start Benchmark"}
         </button>
       </form>
     </div>

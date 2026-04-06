@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listRuns, cancelRun, deleteRun } from "../api";
-import type { RunListItem } from "../types";
+import { listRuns, listSuiteRuns, cancelRun, deleteRun } from "../api";
+
+// Unified job item that can represent either a single run or a suite run
+interface JobItem {
+  id: string;
+  type: "run" | "suite";
+  model_hf_id: string;
+  instance_type_name: string;
+  framework_or_suite: string; // framework for runs, suite_id for suites
+  status: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
 
 const STATUS_TABS = ["all", "pending", "running", "completed", "failed"] as const;
 type StatusTab = (typeof STATUS_TABS)[number];
@@ -15,7 +27,7 @@ const statusColor: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
-function formatDuration(item: RunListItem): string {
+function formatDuration(item: JobItem): string {
   if (!item.started_at) return "\u2014";
   const start = new Date(item.started_at).getTime();
   const end = item.completed_at
@@ -33,34 +45,82 @@ function formatTime(iso: string): string {
 }
 
 export default function Jobs() {
-  const [runs, setRuns] = useState<RunListItem[]>([]);
+  const [jobs, setJobs] = useState<JobItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<StatusTab>("all");
   const [modelSearch, setModelSearch] = useState("");
   const [offset, setOffset] = useState(0);
 
-  const fetchRuns = useCallback(async () => {
+  const fetchJobs = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const items = await listRuns({
-        status: tab === "all" ? undefined : tab,
-        model: modelSearch || undefined,
-        limit: PAGE_SIZE,
-        offset,
-      });
-      setRuns(items);
-    } catch (e: any) {
-      setError(e.message);
+      // Fetch both single runs and suite runs in parallel
+      const [runs, suiteRuns] = await Promise.all([
+        listRuns({
+          status: tab === "all" ? undefined : tab,
+          model: modelSearch || undefined,
+          limit: PAGE_SIZE,
+          offset,
+        }),
+        listSuiteRuns(),
+      ]);
+
+      // Convert runs to unified format
+      const runItems: JobItem[] = runs.map((r) => ({
+        id: r.id,
+        type: "run" as const,
+        model_hf_id: r.model_hf_id,
+        instance_type_name: r.instance_type_name,
+        framework_or_suite: r.framework,
+        status: r.status,
+        created_at: r.created_at,
+        started_at: r.started_at,
+        completed_at: r.completed_at,
+      }));
+
+      // Convert suite runs to unified format
+      const suiteItems: JobItem[] = suiteRuns.map((s) => ({
+        id: s.id,
+        type: "suite" as const,
+        model_hf_id: s.model_hf_id,
+        instance_type_name: s.instance_type_name,
+        framework_or_suite: s.suite_id,
+        status: s.status,
+        created_at: s.created_at,
+        started_at: s.started_at,
+        completed_at: s.completed_at,
+      }));
+
+      // Filter suite runs by status and model search
+      let filteredSuites = suiteItems;
+      if (tab !== "all") {
+        filteredSuites = filteredSuites.filter((s) => s.status === tab);
+      }
+      if (modelSearch) {
+        const search = modelSearch.toLowerCase();
+        filteredSuites = filteredSuites.filter((s) =>
+          s.model_hf_id.toLowerCase().includes(search)
+        );
+      }
+
+      // Merge and sort by created_at descending
+      const allJobs = [...runItems, ...filteredSuites].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      setJobs(allJobs);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setLoading(false);
     }
   }, [tab, modelSearch, offset]);
 
   useEffect(() => {
-    fetchRuns();
-  }, [fetchRuns]);
+    fetchJobs();
+  }, [fetchJobs]);
 
   // Reset offset when filters change.
   useEffect(() => {
@@ -68,23 +128,23 @@ export default function Jobs() {
   }, [tab, modelSearch]);
 
   const handleCancel = async (id: string) => {
-    if (!window.confirm(`Cancel run ${id.slice(0, 8)}?`)) return;
+    if (!window.confirm(`Cancel job ${id.slice(0, 8)}?`)) return;
     try {
       await cancelRun(id);
-      fetchRuns();
-    } catch (e: any) {
-      setError(e.message);
+      fetchJobs();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!window.confirm(`Delete run ${id.slice(0, 8)}? This cannot be undone.`))
+    if (!window.confirm(`Delete job ${id.slice(0, 8)}? This cannot be undone.`))
       return;
     try {
       await deleteRun(id);
-      fetchRuns();
-    } catch (e: any) {
-      setError(e.message);
+      fetchJobs();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unknown error");
     }
   };
 
@@ -94,7 +154,7 @@ export default function Jobs() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Jobs</h1>
         <button
-          onClick={fetchRuns}
+          onClick={fetchJobs}
           disabled={loading}
           className="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
         >
@@ -141,7 +201,10 @@ export default function Jobs() {
                 Status
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Run ID
+                Type
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                ID
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Model
@@ -150,7 +213,7 @@ export default function Jobs() {
                 Instance
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                Framework
+                Framework/Suite
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                 Created
@@ -164,74 +227,87 @@ export default function Jobs() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {loading && runs.length === 0 ? (
+            {loading && jobs.length === 0 ? (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-8 text-center text-gray-500"
                 >
                   Loading...
                 </td>
               </tr>
-            ) : runs.length === 0 ? (
+            ) : jobs.length === 0 ? (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-8 text-center text-gray-500"
                 >
-                  No runs found.
+                  No jobs found.
                 </td>
               </tr>
             ) : (
-              runs.map((run) => (
-                <tr key={run.id} className="hover:bg-gray-50">
+              jobs.map((job) => (
+                <tr key={`${job.type}-${job.id}`} className="hover:bg-gray-50">
                   <td className="px-4 py-3">
                     <span
                       className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
-                        statusColor[run.status] ?? "bg-gray-100"
+                        statusColor[job.status] ?? "bg-gray-100"
                       }`}
                     >
-                      {run.status}
+                      {job.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`inline-block px-2 py-1 rounded text-xs font-medium ${
+                        job.type === "suite"
+                          ? "bg-purple-100 text-purple-800"
+                          : "bg-gray-100 text-gray-800"
+                      }`}
+                    >
+                      {job.type === "suite" ? "Suite" : "Run"}
                     </span>
                   </td>
                   <td className="px-4 py-3 text-sm">
                     <Link
-                      to={`/results/${run.id}`}
+                      to={job.type === "suite" ? `/suite-runs/${job.id}` : `/results/${job.id}`}
                       className="text-blue-600 hover:underline font-mono"
                     >
-                      {run.id.slice(0, 8)}
+                      {job.id.slice(0, 8)}
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900">
-                    {run.model_hf_id}
+                    {job.model_hf_id}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900">
-                    {run.instance_type_name}
+                    {job.instance_type_name}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-900">
-                    {run.framework}
+                    {job.framework_or_suite}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500">
-                    {formatTime(run.created_at)}
+                    {formatTime(job.created_at)}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500">
-                    {formatDuration(run)}
+                    {formatDuration(job)}
                   </td>
                   <td className="px-4 py-3 text-sm space-x-2">
-                    {(run.status === "pending" || run.status === "running") && (
+                    {job.status === "running" && (
                       <button
-                        onClick={() => handleCancel(run.id)}
+                        onClick={() => handleCancel(job.id)}
                         className="text-yellow-600 hover:text-yellow-800 font-medium"
                       >
                         Cancel
                       </button>
                     )}
-                    <button
-                      onClick={() => handleDelete(run.id)}
-                      className="text-red-600 hover:text-red-800 font-medium"
-                    >
-                      Delete
-                    </button>
+                    {(job.status === "completed" || job.status === "failed") && (
+                      <button
+                        onClick={() => handleDelete(job.id)}
+                        className="text-red-600 hover:text-red-800 font-medium"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))
@@ -250,11 +326,11 @@ export default function Jobs() {
           Previous
         </button>
         <span className="text-sm text-gray-500">
-          Showing {offset + 1}–{offset + runs.length}
+          Showing {jobs.length} jobs
         </span>
         <button
           onClick={() => setOffset(offset + PAGE_SIZE)}
-          disabled={runs.length < PAGE_SIZE}
+          disabled={jobs.length < PAGE_SIZE}
           className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Next

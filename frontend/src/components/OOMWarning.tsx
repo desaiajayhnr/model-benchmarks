@@ -5,7 +5,7 @@ interface Props {
 }
 
 export default function OOMWarning({ history }: Props) {
-  if (!history || history.total_count === 0) {
+  if (!history || history.total_count === 0 || !history.events?.length) {
     return null;
   }
 

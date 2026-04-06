@@ -14,6 +14,10 @@ import type {
   EstimateResponse,
   MemoryBreakdownResponse,
   OOMHistory,
+  Scenario,
+  TestSuite,
+  SuiteRunRequest,
+  TestSuiteRun,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -194,4 +198,42 @@ export function getExportManifestUrl(runId: string): string {
 // Export HTML report (PRD-16)
 export function getExportReportUrl(runId: string): string {
   return `${BASE}/runs/${runId}/report`;
+}
+
+// PRD-12: Scenarios
+export async function listScenarios(): Promise<Scenario[]> {
+  return fetchJSON<Scenario[]>(`${BASE}/scenarios`);
+}
+
+// PRD-13: Test Suites
+export async function listTestSuites(): Promise<TestSuite[]> {
+  return fetchJSON<TestSuite[]>(`${BASE}/test-suites`);
+}
+
+export async function createSuiteRun(req: SuiteRunRequest): Promise<TestSuiteRun> {
+  return fetchJSON<TestSuiteRun>(`${BASE}/suite-runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function getSuiteRun(id: string): Promise<TestSuiteRun> {
+  return fetchJSON<TestSuiteRun>(`${BASE}/suite-runs/${id}`);
+}
+
+// Suite run list item (denormalized for display)
+export interface SuiteRunListItem {
+  id: string;
+  model_hf_id: string;
+  instance_type_name: string;
+  suite_id: string;
+  status: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export async function listSuiteRuns(): Promise<SuiteRunListItem[]> {
+  return fetchJSON<SuiteRunListItem[]>(`${BASE}/suite-runs`);
 }

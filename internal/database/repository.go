@@ -251,9 +251,9 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		     prompt_throughput_tps, generation_throughput_tps,
 		     kv_cache_utilization_avg_pct, kv_cache_utilization_peak_pct,
 		     prefix_cache_hit_rate, preemption_count,
-		     running_requests_avg, running_requests_max)
+		     running_requests_avg, running_requests_max, output_length_mean)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
+		         $24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
 		 RETURNING id`,
 		runID,
 		m.TTFTP50Ms, m.TTFTP90Ms, m.TTFTP95Ms, m.TTFTP99Ms,
@@ -268,7 +268,7 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		m.PromptThroughputTPS, m.GenerationThroughputTPS,
 		m.KVCacheUtilizationAvgPct, m.KVCacheUtilizationPeakPct,
 		m.PrefixCacheHitRate, m.PreemptionCount,
-		m.RunningRequestsAvg, m.RunningRequestsMax,
+		m.RunningRequestsAvg, m.RunningRequestsMax, m.OutputLengthMean,
 	).Scan(&metricsID)
 	if err != nil {
 		return fmt.Errorf("insert metrics: %w", err)
@@ -376,7 +376,7 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		        prompt_throughput_tps, generation_throughput_tps,
 		        kv_cache_utilization_avg_pct, kv_cache_utilization_peak_pct,
 		        prefix_cache_hit_rate, preemption_count,
-		        running_requests_avg, running_requests_max
+		        running_requests_avg, running_requests_max, output_length_mean
 		 FROM benchmark_metrics WHERE run_id = $1`, runID,
 	).Scan(&m.ID, &m.RunID,
 		&m.TTFTP50Ms, &m.TTFTP90Ms, &m.TTFTP95Ms, &m.TTFTP99Ms,
@@ -391,7 +391,7 @@ func (r *Repository) GetMetricsByRunID(ctx context.Context, runID string) (*Benc
 		&m.PromptThroughputTPS, &m.GenerationThroughputTPS,
 		&m.KVCacheUtilizationAvgPct, &m.KVCacheUtilizationPeakPct,
 		&m.PrefixCacheHitRate, &m.PreemptionCount,
-		&m.RunningRequestsAvg, &m.RunningRequestsMax)
+		&m.RunningRequestsAvg, &m.RunningRequestsMax, &m.OutputLengthMean)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

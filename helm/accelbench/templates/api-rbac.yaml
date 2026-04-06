@@ -17,6 +17,10 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "create", "delete"]
+  # Manage configmaps for inference-perf configuration
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "delete"]
   # Manage loadgen jobs
   - apiGroups: ["batch"]
     resources: ["jobs"]

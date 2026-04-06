@@ -319,7 +319,8 @@ func parsePrometheusMetricsExtended(r io.Reader) promScrapeResult {
 		// vLLM exposes these metrics with possible label suffixes.
 		// Match the metric name prefix.
 		switch {
-		case strings.HasPrefix(line, "vllm:gpu_cache_usage_perc"):
+		case strings.HasPrefix(line, "vllm:kv_cache_usage_perc"),
+			strings.HasPrefix(line, "vllm:gpu_cache_usage_perc"): // legacy name
 			if v, err := parsePromValue(line); err == nil {
 				result.utilization = v
 			}
@@ -339,7 +340,8 @@ func parsePrometheusMetricsExtended(r io.Reader) promScrapeResult {
 			if v, err := parsePromValue(line); err == nil {
 				result.genTokens = v
 			}
-		case strings.HasPrefix(line, "vllm:prefix_cache_hit_total"):
+		case strings.HasPrefix(line, "vllm:prefix_cache_hits_total"),
+			strings.HasPrefix(line, "vllm:prefix_cache_hit_total"): // legacy name
 			if v, err := parsePromValue(line); err == nil {
 				result.prefixHits = v
 			}

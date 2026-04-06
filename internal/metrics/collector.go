@@ -51,9 +51,64 @@ type Summary struct {
 	FailedRequests     int     `json:"failed_requests"`
 	RequestsPerSecond  float64 `json:"requests_per_second"`
 
+	// Extended metrics from inference-perf
+	InputThroughputTPS float64  `json:"input_throughput_tps,omitempty"`
+	OutputLengthMean   float64  `json:"output_length_mean,omitempty"`
+	TPOTP50Ms          float64  `json:"tpot_p50_ms,omitempty"`
+	TPOTP90Ms          float64  `json:"tpot_p90_ms,omitempty"`
+	TPOTP99Ms          float64  `json:"tpot_p99_ms,omitempty"`
+
 	// Optional accelerator metrics (from legacy loadgen)
 	AcceleratorUtilizationPct *float64 `json:"accelerator_utilization_pct,omitempty"`
 	AcceleratorMemoryPeakGiB  *float64 `json:"accelerator_memory_peak_gib,omitempty"`
+}
+
+// InferencePerfOutput represents the JSON output from inference-perf v0.2.0+
+type InferencePerfOutput struct {
+	LoadSummary struct {
+		Count int `json:"count"`
+	} `json:"load_summary"`
+	Successes struct {
+		Count   int `json:"count"`
+		Latency struct {
+			RequestLatency struct {
+				Median float64 `json:"median"`
+				P90    float64 `json:"p90"`
+				P95    float64 `json:"p95"`
+				P99    float64 `json:"p99"`
+			} `json:"request_latency"`
+			TimeToFirstToken struct {
+				Median float64 `json:"median"`
+				P90    float64 `json:"p90"`
+				P95    float64 `json:"p95"`
+				P99    float64 `json:"p99"`
+			} `json:"time_to_first_token"`
+			InterTokenLatency struct {
+				Median float64 `json:"median"`
+				P90    float64 `json:"p90"`
+				P95    float64 `json:"p95"`
+				P99    float64 `json:"p99"`
+			} `json:"inter_token_latency"`
+			TimePerOutputToken struct {
+				Median float64 `json:"median"`
+				P90    float64 `json:"p90"`
+				P95    float64 `json:"p95"`
+				P99    float64 `json:"p99"`
+			} `json:"time_per_output_token"`
+		} `json:"latency"`
+		Throughput struct {
+			InputTokensPerSec  float64 `json:"input_tokens_per_sec"`
+			OutputTokensPerSec float64 `json:"output_tokens_per_sec"`
+			TotalTokensPerSec  float64 `json:"total_tokens_per_sec"`
+			RequestsPerSec     float64 `json:"requests_per_sec"`
+		} `json:"throughput"`
+		OutputLen struct {
+			Mean float64 `json:"mean"`
+		} `json:"output_len"`
+	} `json:"successes"`
+	Failures struct {
+		Count int `json:"count"`
+	} `json:"failures"`
 }
 
 // ParseLoadgenOutput parses the JSON output from a load generator pod.
@@ -62,12 +117,18 @@ type Summary struct {
 func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 	var out LoadgenOutput
 
-	// Strategy 1: Try direct JSON unmarshal (S3 case - clean JSON)
+	// Strategy 1: Try direct JSON unmarshal (legacy AccelBench format)
 	if err := json.Unmarshal(data, &out); err == nil && len(out.Requests) > 0 {
 		return &out, nil
 	}
 
-	// Strategy 2: Look for marker-delimited JSON (log parsing fallback)
+	// Strategy 2: Try inference-perf v0.2.0 format
+	var ipOut InferencePerfOutput
+	if err := json.Unmarshal(data, &ipOut); err == nil && ipOut.Successes.Count > 0 {
+		return convertInferencePerfOutput(&ipOut), nil
+	}
+
+	// Strategy 3: Look for marker-delimited JSON (log parsing fallback)
 	beginMarker := []byte("ACCELBENCH_JSON_BEGIN")
 	endMarker := []byte("ACCELBENCH_JSON_END")
 	if beginIdx := bytes.Index(data, beginMarker); beginIdx >= 0 {
@@ -80,7 +141,7 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 		}
 	}
 
-	// Strategy 3: Scan line-by-line for a JSON payload
+	// Strategy 4: Scan line-by-line for a JSON payload
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || line[0] != '{' {
@@ -92,6 +153,54 @@ func ParseLoadgenOutput(data []byte) (*LoadgenOutput, error) {
 	}
 
 	return nil, fmt.Errorf("no valid JSON payload found in %d bytes of output", len(data))
+}
+
+// convertInferencePerfOutput converts inference-perf format to LoadgenOutput.
+// Since inference-perf provides aggregate stats (not per-request), we create
+// synthetic request entries to pass through the existing metrics pipeline.
+func convertInferencePerfOutput(ip *InferencePerfOutput) *LoadgenOutput {
+	// inference-perf reports latencies in seconds, convert to milliseconds
+	ttftP50 := ip.Successes.Latency.TimeToFirstToken.Median * 1000
+	ttftP90 := ip.Successes.Latency.TimeToFirstToken.P90 * 1000
+	ttftP99 := ip.Successes.Latency.TimeToFirstToken.P99 * 1000
+
+	e2eP50 := ip.Successes.Latency.RequestLatency.Median * 1000
+	e2eP90 := ip.Successes.Latency.RequestLatency.P90 * 1000
+	e2eP99 := ip.Successes.Latency.RequestLatency.P99 * 1000
+
+	itlP50 := ip.Successes.Latency.InterTokenLatency.Median * 1000
+	itlP90 := ip.Successes.Latency.InterTokenLatency.P90 * 1000
+	itlP99 := ip.Successes.Latency.InterTokenLatency.P99 * 1000
+
+	// TPOT (time per output token) in milliseconds
+	tpotP50 := ip.Successes.Latency.TimePerOutputToken.Median * 1000
+	tpotP90 := ip.Successes.Latency.TimePerOutputToken.P90 * 1000
+	tpotP99 := ip.Successes.Latency.TimePerOutputToken.P99 * 1000
+
+	// Create synthetic requests at p50, p90, p99 to preserve percentile info
+	// The ComputeMetrics function will recompute percentiles from these
+	requests := []RequestResult{
+		{TTFTMs: ttftP50, E2ELatencyMs: e2eP50, ITLMs: itlP50, TPOTMs: tpotP50, Success: true},
+		{TTFTMs: ttftP50, E2ELatencyMs: e2eP50, ITLMs: itlP50, TPOTMs: tpotP50, Success: true},
+		{TTFTMs: ttftP90, E2ELatencyMs: e2eP90, ITLMs: itlP90, TPOTMs: tpotP90, Success: true},
+		{TTFTMs: ttftP99, E2ELatencyMs: e2eP99, ITLMs: itlP99, TPOTMs: tpotP99, Success: true},
+	}
+
+	return &LoadgenOutput{
+		Requests: requests,
+		Summary: Summary{
+			TotalRequests:          ip.LoadSummary.Count,
+			SuccessfulRequests:     ip.Successes.Count,
+			FailedRequests:         ip.Failures.Count,
+			ThroughputAggregateTPS: ip.Successes.Throughput.OutputTokensPerSec,
+			RequestsPerSecond:      ip.Successes.Throughput.RequestsPerSec,
+			InputThroughputTPS:     ip.Successes.Throughput.InputTokensPerSec,
+			OutputLengthMean:       ip.Successes.OutputLen.Mean,
+			TPOTP50Ms:              tpotP50,
+			TPOTP90Ms:              tpotP90,
+			TPOTP99Ms:              tpotP99,
+		},
+	}
 }
 
 // ComputeMetrics takes parsed loadgen output and computes the full set of
@@ -134,7 +243,20 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 	itlP50, itlP90, itlP95, itlP99 := percentiles(itls)
 
 	// Extended latency percentiles
+	// For TPOT, prefer per-request data but fall back to summary values from inference-perf
 	tpotP50, tpotP90, _, tpotP99 := percentiles(tpots)
+	if tpotP50 == nil && out.Summary.TPOTP50Ms > 0 {
+		v50 := out.Summary.TPOTP50Ms
+		tpotP50 = &v50
+	}
+	if tpotP90 == nil && out.Summary.TPOTP90Ms > 0 {
+		v90 := out.Summary.TPOTP90Ms
+		tpotP90 = &v90
+	}
+	if tpotP99 == nil && out.Summary.TPOTP99Ms > 0 {
+		v99 := out.Summary.TPOTP99Ms
+		tpotP99 = &v99
+	}
 	prefillP50, _, _, _ := percentiles(prefills)
 	decodeP50, _, _, _ := percentiles(decodes)
 	queueP50, _, _, _ := percentiles(queues)
@@ -169,6 +291,18 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 	successCount := out.Summary.SuccessfulRequests
 	failCount := out.Summary.FailedRequests
 
+	// Input throughput (prompt tokens/sec) from inference-perf
+	var inputTPS *float64
+	if out.Summary.InputThroughputTPS > 0 {
+		inputTPS = &out.Summary.InputThroughputTPS
+	}
+
+	// Output length mean from inference-perf
+	var outputLenMean *float64
+	if out.Summary.OutputLengthMean > 0 {
+		outputLenMean = &out.Summary.OutputLengthMean
+	}
+
 	return &database.BenchmarkMetrics{
 		TTFTP50Ms:               ttftP50,
 		TTFTP90Ms:               ttftP90,
@@ -196,6 +330,8 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 		SuccessfulRequests:        &successCount,
 		FailedRequests:            &failCount,
 		TotalDurationSeconds:      dur,
+		PromptThroughputTPS:       inputTPS,
+		OutputLengthMean:          outputLenMean,
 	}
 }
 

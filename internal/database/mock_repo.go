@@ -597,3 +597,48 @@ func (m *MockRepo) ListTestSuiteRuns(_ context.Context, modelID, instanceTypeID 
 	}
 	return runs, nil
 }
+
+func (m *MockRepo) ListSuiteRunsWithNames(_ context.Context) ([]SuiteRunListItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var items []SuiteRunListItem
+	for _, run := range m.suiteRuns {
+		var modelHfID, instName string
+		for _, mdl := range m.models {
+			if mdl.ID == run.ModelID {
+				modelHfID = mdl.HfID
+				break
+			}
+		}
+		for _, it := range m.instTypes {
+			if it.ID == run.InstanceTypeID {
+				instName = it.Name
+				break
+			}
+		}
+		items = append(items, SuiteRunListItem{
+			ID:               run.ID,
+			ModelHfID:        modelHfID,
+			InstanceTypeName: instName,
+			SuiteID:          run.SuiteID,
+			Status:           run.Status,
+			CreatedAt:        run.CreatedAt,
+			StartedAt:        run.StartedAt,
+			CompletedAt:      run.CompletedAt,
+		})
+	}
+	return items, nil
+}
+
+func (m *MockRepo) DeleteSuiteRun(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.suiteRuns, id)
+	// Also delete associated scenario results
+	for k, r := range m.scenarioResults {
+		if r.SuiteRunID == id {
+			delete(m.scenarioResults, k)
+		}
+	}
+	return nil
+}

@@ -83,6 +83,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/runs/{id}/export", s.handleExportManifest)
 	// Export HTML report (PRD-16)
 	mux.HandleFunc("GET /api/v1/runs/{id}/report", s.handleExportReport)
+	// PRD-12/13: Scenarios and test suites
+	mux.HandleFunc("GET /api/v1/scenarios", s.handleListScenarios)
+	mux.HandleFunc("GET /api/v1/test-suites", s.handleListTestSuites)
+	mux.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
+	mux.HandleFunc("POST /api/v1/suite-runs", s.handleCreateSuiteRun)
+	mux.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +146,37 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Default dataset from scenario if not provided
+	datasetName := req.DatasetName
+	scenarioID := req.ScenarioID
+	if scenarioID == "" {
+		// For backwards compatibility, check if RunType contains a scenario ID
+		if scn := scenario.Get(req.RunType); scn != nil {
+			scenarioID = req.RunType
+			if datasetName == "" {
+				datasetName = scn.Dataset
+			}
+		}
+	} else if datasetName == "" {
+		if scn := scenario.Get(scenarioID); scn != nil {
+			datasetName = scn.Dataset
+		}
+	}
+	if datasetName == "" {
+		datasetName = "synthetic" // fallback default
+	}
+
+	// Determine run_type: 'catalog' for seeded runs, 'on_demand' for user-initiated
+	runType := req.RunType
+	if runType != "catalog" {
+		runType = "on_demand"
+	}
+
 	// Create the benchmark run record.
+	var scenarioPtr *string
+	if scenarioID != "" {
+		scenarioPtr = &scenarioID
+	}
 	run := &database.BenchmarkRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
@@ -151,8 +187,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		Concurrency:          req.Concurrency,
 		InputSequenceLength:  req.InputSequenceLength,
 		OutputSequenceLength: req.OutputSequenceLength,
-		DatasetName:          req.DatasetName,
-		RunType:              req.RunType,
+		DatasetName:          datasetName,
+		RunType:              runType,
+		ScenarioID:           scenarioPtr,
 		MinDurationSeconds:   req.MinDurationSeconds,
 		MaxModelLen:          req.MaxModelLen,
 		Status:               "pending",
@@ -244,28 +281,47 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	ctx := r.Context()
 
+	// Try benchmark run first
 	run, err := s.repo.GetBenchmarkRun(ctx, runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	if run == nil {
+
+	if run != nil {
+		// Found a benchmark run
+		if run.Status != "pending" && run.Status != "running" {
+			writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel run with status %q", run.Status))
+			return
+		}
+		s.orch.CancelRun(runID)
+		if err := s.repo.UpdateRunStatus(ctx, runID, "failed"); err != nil {
+			writeError(w, http.StatusInternalServerError, "update status failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"id": runID, "status": "failed"})
+		return
+	}
+
+	// Try suite run
+	suiteRun, err := s.repo.GetTestSuiteRun(ctx, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if suiteRun == nil {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
-	if run.Status != "pending" && run.Status != "running" {
-		writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel run with status %q", run.Status))
+	if suiteRun.Status != "pending" && suiteRun.Status != "running" {
+		writeError(w, http.StatusConflict, fmt.Sprintf("cannot cancel suite run with status %q", suiteRun.Status))
 		return
 	}
-
-	// Cancel the orchestrator goroutine if it's running.
 	s.orch.CancelRun(runID)
-
-	if err := s.repo.UpdateRunStatus(ctx, runID, "failed"); err != nil {
+	if err := s.repo.UpdateSuiteRunStatus(ctx, runID, "failed", nil); err != nil {
 		writeError(w, http.StatusInternalServerError, "update status failed")
 		return
 	}
-
 	writeJSON(w, http.StatusOK, map[string]string{"id": runID, "status": "failed"})
 }
 
@@ -273,28 +329,47 @@ func (s *Server) handleDeleteRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 	ctx := r.Context()
 
+	// Try benchmark run first
 	run, err := s.repo.GetBenchmarkRun(ctx, runID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	if run == nil {
+
+	if run != nil {
+		// Cancel if still active
+		if run.Status == "pending" || run.Status == "running" {
+			s.orch.CancelRun(runID)
+			_ = s.repo.UpdateRunStatus(ctx, runID, "failed")
+		}
+		if err := s.repo.DeleteRun(ctx, runID); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Try suite run
+	suiteRun, err := s.repo.GetTestSuiteRun(ctx, runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if suiteRun == nil {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
 
-	// Cancel if still active — the deferred teardown in Execute will
-	// clean up K8s resources automatically.
-	if run.Status == "pending" || run.Status == "running" {
+	// Cancel if still active
+	if suiteRun.Status == "pending" || suiteRun.Status == "running" {
 		s.orch.CancelRun(runID)
-		_ = s.repo.UpdateRunStatus(ctx, runID, "failed")
+		_ = s.repo.UpdateSuiteRunStatus(ctx, runID, "failed", nil)
 	}
-
-	if err := s.repo.DeleteRun(ctx, runID); err != nil {
+	if err := s.repo.DeleteSuiteRun(ctx, runID); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
-
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -676,6 +751,19 @@ func (s *Server) handleListTestSuites(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleListSuiteRuns returns a list of test suite runs.
+func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
+	items, err := s.repo.ListSuiteRunsWithNames(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list suite runs failed")
+		return
+	}
+	if items == nil {
+		items = []database.SuiteRunListItem{}
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
 // handleCreateSuiteRun creates a new test suite run.
 func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	var req database.SuiteRunRequest
@@ -685,22 +773,39 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required fields
-	if req.ModelHfID == "" || req.InstanceTypeName == "" || req.SuiteID == "" {
-		writeError(w, http.StatusBadRequest, "model_hf_id, instance_type_name, and suite_id are required")
+	if req.ModelHfID == "" || req.InstanceTypeName == "" {
+		writeError(w, http.StatusBadRequest, "model_hf_id and instance_type_name are required")
 		return
 	}
 
-	// Validate suite exists
-	suite := testsuite.Get(req.SuiteID)
-	if suite == nil {
-		writeError(w, http.StatusBadRequest, "unknown suite: "+req.SuiteID)
+	// Need either suite_id or scenario_ids
+	if req.SuiteID == "" && len(req.ScenarioIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "either suite_id or scenario_ids is required")
 		return
 	}
 
-	// Validate all scenarios in suite exist
-	for _, scenarioID := range suite.Scenarios {
+	// Determine scenarios to run
+	var scenarioIDs []string
+	suiteID := req.SuiteID
+
+	if len(req.ScenarioIDs) > 0 {
+		// Custom scenario list
+		scenarioIDs = req.ScenarioIDs
+		suiteID = "custom"
+	} else {
+		// Predefined suite
+		suite := testsuite.Get(req.SuiteID)
+		if suite == nil {
+			writeError(w, http.StatusBadRequest, "unknown suite: "+req.SuiteID)
+			return
+		}
+		scenarioIDs = suite.Scenarios
+	}
+
+	// Validate all scenarios exist
+	for _, scenarioID := range scenarioIDs {
 		if scenario.Get(scenarioID) == nil {
-			writeError(w, http.StatusInternalServerError, "suite references unknown scenario: "+scenarioID)
+			writeError(w, http.StatusBadRequest, "unknown scenario: "+scenarioID)
 			return
 		}
 	}
@@ -729,7 +834,7 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	suiteRun := &database.TestSuiteRun{
 		ModelID:              model.ID,
 		InstanceTypeID:       instType.ID,
-		SuiteID:              req.SuiteID,
+		SuiteID:              suiteID,
 		TensorParallelDegree: req.TensorParallelDegree,
 		Quantization:         req.Quantization,
 		MaxModelLen:          req.MaxModelLen,
@@ -743,7 +848,7 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create scenario result records for each scenario
-	for _, scenarioID := range suite.Scenarios {
+	for _, scenarioID := range scenarioIDs {
 		result := &database.ScenarioResult{
 			SuiteRunID: suiteRunID,
 			ScenarioID: scenarioID,
@@ -754,6 +859,9 @@ func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Update request with resolved scenario IDs for executor
+	req.ScenarioIDs = scenarioIDs
 
 	// Start suite execution in background
 	go s.orch.ExecuteSuite(context.Background(), suiteRunID, req)
@@ -824,4 +932,5 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		Results: results,
 	})
 }
+
 

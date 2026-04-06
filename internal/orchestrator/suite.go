@@ -19,6 +19,19 @@ import (
 // ExecuteSuite runs all scenarios in a test suite sequentially.
 // The model is deployed once and reused for all scenarios.
 func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req database.SuiteRunRequest) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Register the cancel function so CancelRun can stop this suite.
+	o.mu.Lock()
+	o.cancels[suiteRunID] = cancel
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		delete(o.cancels, suiteRunID)
+		o.mu.Unlock()
+	}()
+
 	suite := testsuite.Get(req.SuiteID)
 	if suite == nil {
 		log.Printf("[suite %s] unknown suite: %s", suiteRunID[:8], req.SuiteID)

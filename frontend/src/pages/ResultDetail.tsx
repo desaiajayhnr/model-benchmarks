@@ -267,33 +267,33 @@ export default function ResultDetail() {
           )}
 
           {/* Throughput Breakdown section */}
-          {(metrics.prompt_throughput_tps || metrics.generation_throughput_tps) && (
+          {(metrics.prompt_throughput_tps || metrics.generation_throughput_tps || metrics.output_length_mean) && (
             <div className="bg-white border border-gray-200 rounded-lg p-6 mb-8">
               <h2 className="text-lg font-semibold mb-4">Throughput Breakdown</h2>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <MetricCard
-                  label="Prompt Tokens"
+                  label="Input Throughput"
                   value={metrics.prompt_throughput_tps}
                   unit="tok/s"
                   precision={1}
                 />
                 <MetricCard
-                  label="Generation Tokens"
+                  label="Output Throughput"
                   value={metrics.generation_throughput_tps}
                   unit="tok/s"
                   precision={1}
+                />
+                <MetricCard
+                  label="Avg Output Length"
+                  value={metrics.output_length_mean}
+                  unit="tokens"
+                  precision={0}
                 />
                 <MetricCard
                   label="Running Requests Avg"
                   value={metrics.running_requests_avg}
                   unit=""
                   precision={1}
-                />
-                <MetricCard
-                  label="Running Requests Max"
-                  value={metrics.running_requests_max}
-                  unit=""
-                  precision={0}
                 />
               </div>
             </div>

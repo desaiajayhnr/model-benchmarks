@@ -90,6 +90,7 @@ export interface BenchmarkMetrics {
   preemption_count?: number;
   running_requests_avg?: number;
   running_requests_max?: number;
+  output_length_mean?: number;
 }
 
 export interface RunRequest {
@@ -103,7 +104,7 @@ export interface RunRequest {
   concurrency: number;
   input_sequence_length: number;
   output_sequence_length: number;
-  dataset_name: string;
+  dataset_name?: string;
   run_type: string;
   max_model_len?: number;
   min_duration_seconds?: number;
@@ -325,4 +326,90 @@ export interface OOMHistory {
   instance_type: string;
   events: OOMEvent[];
   total_count: number;
+}
+
+// PRD-12: Scenarios
+export interface LoadStage {
+  duration: number;
+  rate: number;
+}
+
+export interface Scenario {
+  id: string;
+  name: string;
+  description: string;
+  duration_seconds: number;
+  load_type: string;
+  stages: LoadStage[];
+}
+
+// PRD-13: Test Suites
+export interface TestSuite {
+  id: string;
+  name: string;
+  description: string;
+  scenarios: string[];
+  total_duration_seconds: number;
+}
+
+export interface SuiteRunRequest {
+  model_hf_id: string;
+  model_hf_revision?: string;
+  instance_type_name: string;
+  suite_id?: string;           // Predefined suite ID
+  scenario_ids?: string[];     // Custom scenario list (alternative to suite_id)
+  framework?: string;
+  framework_version?: string;
+  tensor_parallel_degree?: number;
+  quantization?: string;
+  max_model_len?: number;
+  hf_token?: string;
+}
+
+export interface ScenarioProgress {
+  id: string;
+  status: string;
+}
+
+export interface SuiteRunProgress {
+  completed: number;
+  total: number;
+  scenarios: ScenarioProgress[];
+}
+
+export interface ScenarioResult {
+  id: string;
+  suite_run_id: string;
+  scenario_id: string;
+  status: string;
+  error_message?: string;
+  started_at?: string;
+  completed_at?: string;
+  // Metrics (populated when status === "completed")
+  ttft_p50_ms?: number;
+  ttft_p90_ms?: number;
+  ttft_p99_ms?: number;
+  e2e_latency_p50_ms?: number;
+  e2e_latency_p90_ms?: number;
+  e2e_latency_p99_ms?: number;
+  itl_p50_ms?: number;
+  itl_p90_ms?: number;
+  itl_p99_ms?: number;
+  throughput_tps?: number;
+  requests_per_second?: number;
+  successful_requests?: number;
+  failed_requests?: number;
+}
+
+export interface TestSuiteRun {
+  id: string;
+  model_id: string;
+  instance_type_id: string;
+  suite_id: string;
+  status: string;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+  progress?: SuiteRunProgress;
+  results?: ScenarioResult[];
 }
