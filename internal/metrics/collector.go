@@ -303,6 +303,13 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 		outputLenMean = &out.Summary.OutputLengthMean
 	}
 
+	// GenerationThroughputTPS is the same as ThroughputAggregateTPS (output tokens/sec).
+	// We set both for consistency between GPU scraper metrics and loadgen metrics.
+	var genTPS *float64
+	if aggTPS != nil && *aggTPS > 0 {
+		genTPS = aggTPS
+	}
+
 	return &database.BenchmarkMetrics{
 		TTFTP50Ms:               ttftP50,
 		TTFTP90Ms:               ttftP90,
@@ -331,6 +338,7 @@ func ComputeMetrics(out *LoadgenOutput) *database.BenchmarkMetrics {
 		FailedRequests:            &failCount,
 		TotalDurationSeconds:      dur,
 		PromptThroughputTPS:       inputTPS,
+		GenerationThroughputTPS:   genTPS,
 		OutputLengthMean:          outputLenMean,
 	}
 }

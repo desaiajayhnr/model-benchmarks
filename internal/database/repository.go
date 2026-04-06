@@ -224,6 +224,25 @@ func (r *Repository) UpdateLoadgenConfig(ctx context.Context, runID, config stri
 	return nil
 }
 
+// SetLoadgenStartedAt records when the load generator job started.
+func (r *Repository) SetLoadgenStartedAt(ctx context.Context, runID string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE benchmark_runs SET loadgen_started_at = $1 WHERE id = $2`, time.Now(), runID)
+	if err != nil {
+		return fmt.Errorf("set loadgen started: %w", err)
+	}
+	return nil
+}
+
+// GetLoadgenStartedAt returns the loadgen_started_at timestamp for a run.
+func (r *Repository) GetLoadgenStartedAt(ctx context.Context, runID string) (*time.Time, error) {
+	var t *time.Time
+	err := r.pool.QueryRow(ctx, `SELECT loadgen_started_at FROM benchmark_runs WHERE id = $1`, runID).Scan(&t)
+	if err != nil {
+		return nil, fmt.Errorf("get loadgen started: %w", err)
+	}
+	return t, nil
+}
+
 // PersistMetrics inserts benchmark metrics and marks the run as completed
 // within a single transaction. It verifies the write by reading back the
 // inserted metrics row before committing.
@@ -233,6 +252,16 @@ func (r *Repository) PersistMetrics(ctx context.Context, runID string, m *Benchm
 		return fmt.Errorf("begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Calculate duration from loadgen_started_at if not already set.
+	if m.TotalDurationSeconds == nil || *m.TotalDurationSeconds == 0 {
+		var loadgenStartedAt *time.Time
+		_ = tx.QueryRow(ctx, `SELECT loadgen_started_at FROM benchmark_runs WHERE id = $1`, runID).Scan(&loadgenStartedAt)
+		if loadgenStartedAt != nil {
+			dur := time.Since(*loadgenStartedAt).Seconds()
+			m.TotalDurationSeconds = &dur
+		}
+	}
 
 	// Insert metrics.
 	var metricsID string
@@ -309,12 +338,14 @@ func (r *Repository) GetBenchmarkRun(ctx context.Context, runID string) (*Benchm
 		`SELECT id, model_id, instance_type_id, framework, framework_version,
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, min_duration_seconds, max_model_len, status, superseded, started_at, completed_at, created_at
+		        run_type, min_duration_seconds, max_model_len, status, superseded,
+		        started_at, loadgen_started_at, completed_at, created_at
 		 FROM benchmark_runs WHERE id = $1`, runID,
 	).Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 		&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 		&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
-		&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt)
+		&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.Superseded,
+		&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -333,7 +364,8 @@ func (r *Repository) GetRunsByStatus(ctx context.Context, status string) ([]Benc
 		`SELECT id, model_id, instance_type_id, framework, framework_version,
 		        tensor_parallel_degree, quantization, concurrency,
 		        input_sequence_length, output_sequence_length, dataset_name,
-		        run_type, min_duration_seconds, max_model_len, status, superseded, started_at, completed_at, created_at
+		        run_type, min_duration_seconds, max_model_len, status, superseded,
+		        started_at, loadgen_started_at, completed_at, created_at
 		 FROM benchmark_runs WHERE status = $1`, status,
 	)
 	if err != nil {
@@ -348,7 +380,8 @@ func (r *Repository) GetRunsByStatus(ctx context.Context, status string) ([]Benc
 		if err := rows.Scan(&run.ID, &run.ModelID, &run.InstanceTypeID, &run.Framework, &run.FrameworkVersion,
 			&run.TensorParallelDegree, &run.Quantization, &run.Concurrency,
 			&run.InputSequenceLength, &run.OutputSequenceLength, &run.DatasetName,
-			&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.Superseded, &run.StartedAt, &run.CompletedAt, &run.CreatedAt); err != nil {
+			&run.RunType, &run.MinDurationSeconds, &maxModelLen, &run.Status, &run.Superseded,
+			&run.StartedAt, &run.LoadgenStartedAt, &run.CompletedAt, &run.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan run: %w", err)
 		}
 		if maxModelLen != nil {

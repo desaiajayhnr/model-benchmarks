@@ -131,6 +131,28 @@ func (m *MockRepo) UpdateLoadgenConfig(_ context.Context, runID, config string) 
 	return nil
 }
 
+func (m *MockRepo) SetLoadgenStartedAt(_ context.Context, runID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok {
+		return fmt.Errorf("run %s not found", runID)
+	}
+	now := time.Now()
+	run.LoadgenStartedAt = &now
+	return nil
+}
+
+func (m *MockRepo) GetLoadgenStartedAt(_ context.Context, runID string) (*time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	run, ok := m.runs[runID]
+	if !ok {
+		return nil, fmt.Errorf("run %s not found", runID)
+	}
+	return run.LoadgenStartedAt, nil
+}
+
 func (m *MockRepo) PersistMetrics(_ context.Context, runID string, bm *BenchmarkMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

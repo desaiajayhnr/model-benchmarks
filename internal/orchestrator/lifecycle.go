@@ -129,6 +129,9 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 
 	// Phase 4: Launch load generator Job.
 	log.Printf("[%s] launching load generator", cfg.RunID[:8])
+	if err := o.repo.SetLoadgenStartedAt(ctx, cfg.RunID); err != nil {
+		log.Printf("[%s] warning: failed to set loadgen_started_at: %v", cfg.RunID[:8], err)
+	}
 	if err := o.launchLoadgen(ctx, ns, loadgenName, modelName, cfg); err != nil {
 		if gpuScraper != nil {
 			gpuScraper.Stop()

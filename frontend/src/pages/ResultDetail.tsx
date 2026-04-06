@@ -161,17 +161,6 @@ export default function ResultDetail() {
               unit="ms"
             />
             <MetricCard
-              label="Throughput"
-              value={metrics.throughput_aggregate_tps}
-              unit="tok/s"
-              precision={0}
-            />
-            <MetricCard
-              label="Per-Request TPS"
-              value={metrics.throughput_per_request_tps}
-              unit="tok/s"
-            />
-            <MetricCard
               label="Requests/sec"
               value={metrics.requests_per_second}
               unit="rps"

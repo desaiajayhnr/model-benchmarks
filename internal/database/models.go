@@ -45,6 +45,7 @@ type BenchmarkRun struct {
 	Status                string     `json:"status"`
 	Superseded            bool       `json:"superseded"`
 	StartedAt             *time.Time `json:"started_at,omitempty"`
+	LoadgenStartedAt      *time.Time `json:"loadgen_started_at,omitempty"`
 	CompletedAt           *time.Time `json:"completed_at,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 }
