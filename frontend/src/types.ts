@@ -403,6 +403,14 @@ export interface ScenarioResult {
   accelerator_memory_peak_gib?: number;
 }
 
+export interface ScenarioDefinition {
+  id: string;
+  name: string;
+  target_qps: number;
+  duration_seconds: number;
+  load_type: string;
+}
+
 export interface TestSuiteRun {
   id: string;
   model_id: string;
@@ -414,4 +422,5 @@ export interface TestSuiteRun {
   created_at: string;
   progress?: SuiteRunProgress;
   results?: ScenarioResult[];
+  scenario_definitions?: ScenarioDefinition[];
 }

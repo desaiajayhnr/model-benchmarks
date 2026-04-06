@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getSuiteRun } from "../api";
 import type { TestSuiteRun, ScenarioResult } from "../types";
+import SuiteCharts from "../components/SuiteCharts";
 
 function formatMetric(value: number | undefined, precision = 1): string {
   if (value === undefined || value === null) return "-";
@@ -196,6 +197,14 @@ export default function SuiteResults() {
           ))}
         </div>
       </div>
+
+      {/* Performance Charts */}
+      {suiteRun.results && suiteRun.scenario_definitions && (
+        <SuiteCharts
+          results={suiteRun.results}
+          definitions={suiteRun.scenario_definitions}
+        />
+      )}
     </div>
   );
 }
