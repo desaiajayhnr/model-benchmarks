@@ -36,6 +36,74 @@ resource "helm_release" "karpenter" {
   depends_on = [module.karpenter]
 }
 
+resource "kubectl_manifest" "default_node_class" {
+  yaml_body = <<-YAML
+    apiVersion: karpenter.k8s.aws/v1
+    kind: EC2NodeClass
+    metadata:
+      name: default
+    spec:
+      amiSelectorTerms:
+        - alias: al2023@latest
+      role: ${module.karpenter.node_iam_role_name}
+      subnetSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      securityGroupSelectorTerms:
+        - tags:
+            karpenter.sh/discovery: ${var.cluster_name}
+      metadataOptions:
+        httpEndpoint: enabled
+        httpProtocolIPv6: disabled
+        httpPutResponseHopLimit: 1
+        httpTokens: required
+      tags:
+        NodeType: karpenter-node
+        karpenter.sh/discovery: ${var.cluster_name}
+  YAML
+
+  depends_on = [helm_release.karpenter]
+}
+
+resource "kubectl_manifest" "general_purpose_node_pool" {
+  yaml_body = <<-YAML
+    apiVersion: karpenter.sh/v1
+    kind: NodePool
+    metadata:
+      name: general-purpose
+    spec:
+      template:
+        spec:
+          requirements:
+            - key: kubernetes.io/arch
+              operator: In
+              values: ["amd64"]
+            - key: karpenter.k8s.aws/instance-family
+              operator: In
+              values: ["m6i"]
+            - key: karpenter.sh/capacity-type
+              operator: In
+              values: ["on-demand"]
+            - key: accelbench/node-type
+              operator: In
+              values: ["system"]
+          expireAfter: 720h
+          nodeClassRef:
+            group: karpenter.k8s.aws
+            kind: EC2NodeClass
+            name: default
+      limits:
+        cpu: "1000"
+      disruption:
+        consolidationPolicy: WhenEmptyOrUnderutilized
+        consolidateAfter: 5m
+        budgets:
+          - nodes: "10%"
+  YAML
+
+  depends_on = [kubectl_manifest.default_node_class]
+}
+
 resource "kubectl_manifest" "gpu_node_class" {
   yaml_body = <<-YAML
     apiVersion: karpenter.k8s.aws/v1
