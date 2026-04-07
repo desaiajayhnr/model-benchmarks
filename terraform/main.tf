@@ -25,7 +25,7 @@ provider "helm" {
 }
 
 provider "kubectl" {
-  apply_retry_count      = 5
+  apply_retry_count      = 15
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
   load_config_file       = false

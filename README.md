@@ -98,11 +98,19 @@ terraform apply
 
 ### 2. Container Images
 
-Build and push the four container images:
+Build and push the five container images:
 
 ```bash
-# Set your registry
-REGISTRY=<account-id>.dkr.ecr.<region>.amazonaws.com
+# Set your registry (Terraform creates ECR repos for api, web, migration, loadgen)
+export REGION=us-west-2
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+
+# Create the tools ECR repo (not managed by Terraform)
+aws ecr create-repository --repository-name accelbench-tools --region $REGION --image-tag-mutability MUTABLE
+
+# Login to ECR
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
 
 # API server (also includes pricingrefresh binary)
 docker buildx build --platform linux/amd64 \
@@ -119,24 +127,71 @@ docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.loadgen \
   -t $REGISTRY/accelbench-loadgen:latest --push .
 
+# Tools (used by catalog seed job)
+docker buildx build --platform linux/amd64 \
+  -f docker/Dockerfile.tools \
+  -t $REGISTRY/accelbench-tools:latest --push .
+
 # Database migration
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.migration \
   -t $REGISTRY/accelbench-migration:latest --push .
 ```
 
-### 3. Application (Helm)
+> **Apple Silicon (M-series Mac):** If you see QEMU segfaults with `docker buildx`, use Podman and build without `--platform` — the Dockerfiles use Go cross-compilation and `--platform=linux/amd64` on final stages to produce amd64 images natively.
+
+After building, update `helm/accelbench/values.yaml` with your image repositories:
+
+```bash
+cd helm/accelbench
+sed -i.bak \
+  -e "s|repository: \"\".*# Required:.*accelbench-api|repository: \"${REGISTRY}/accelbench-api\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-web|repository: \"${REGISTRY}/accelbench-web\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-tools|repository: \"${REGISTRY}/accelbench-tools\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-loadgen|repository: \"${REGISTRY}/accelbench-loadgen\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-migration|repository: \"${REGISTRY}/accelbench-migration\"|" \
+  values.yaml
+rm -f values.yaml.bak
+cd ../..
+```
+
+### 3. Database Secret
+
+The Aurora master password is stored in AWS Secrets Manager. Fetch it and create a Kubernetes secret before installing the Helm chart:
+
+```bash
+# Get the Aurora secret ARN from Terraform
+SECRET_ARN=$(cd terraform && terraform output -raw aurora_master_user_secret | jq -r '.[0].secret_arn')
+
+# Fetch the credentials from Secrets Manager
+DB_CREDS=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text)
+DB_USER=$(echo "$DB_CREDS" | jq -r '.username')
+DB_PASS=$(echo "$DB_CREDS" | jq -r '.password')
+DB_HOST=$(cd terraform && terraform output -raw aurora_cluster_endpoint)
+
+# URL-encode the password (required — Aurora passwords contain special characters)
+DB_PASS_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${DB_PASS}', safe=''))")
+
+# Create the namespace with Helm ownership labels
+kubectl create namespace accelbench
+kubectl label namespace accelbench app.kubernetes.io/managed-by=Helm
+kubectl annotate namespace accelbench meta.helm.sh/release-name=accelbench meta.helm.sh/release-namespace=accelbench
+
+# Create the database secret
+kubectl create secret generic accelbench-db \
+  --namespace accelbench \
+  --from-literal=DATABASE_URL="postgres://${DB_USER}:${DB_PASS_ENCODED}@${DB_HOST}:5432/accelbench?sslmode=require"
+```
+
+### 4. Application (Helm)
 
 ```bash
 cd helm/accelbench
 
 helm install accelbench . \
   --namespace accelbench \
-  --create-namespace \
-  --set image.api.repository=$REGISTRY/accelbench-api \
-  --set image.web.repository=$REGISTRY/accelbench-web \
-  --set image.migration.repository=$REGISTRY/accelbench-migration \
   --set database.existingSecret=accelbench-db \
+  --set results.s3Bucket=accelbench-results-${ACCOUNT_ID} \
   --set ingress.host=your-domain.example.com
 ```
 
@@ -149,39 +204,7 @@ The Helm chart deploys:
 - ALB Ingress
 - RBAC for the API server to manage benchmark workloads
 
-### 4. IAM (Pod Identity)
-
-The pricing refresh CronJob needs `pricing:GetProducts` permission. Create an IAM role with a Pod Identity trust policy:
-
-```bash
-# Create IAM role and pod identity association
-aws iam create-role --role-name accelbench-api \
-  --assume-role-policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Principal": {"Service": "pods.eks.amazonaws.com"},
-      "Action": ["sts:AssumeRole", "sts:TagSession"]
-    }]
-  }'
-
-aws iam put-role-policy --role-name accelbench-api \
-  --policy-name pricing-access \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": "pricing:GetProducts",
-      "Resource": "*"
-    }]
-  }'
-
-aws eks create-pod-identity-association \
-  --cluster-name <cluster-name> \
-  --namespace accelbench \
-  --service-account accelbench-api \
-  --role-arn arn:aws:iam::<account-id>:role/accelbench-api
-```
+> **Note:** IAM roles and Pod Identity associations for the API server (pricing access) and load generator (S3 access) are created automatically by Terraform in step 1.
 
 ## API Endpoints
 
