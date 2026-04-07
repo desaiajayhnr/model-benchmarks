@@ -122,7 +122,12 @@ func (o *Orchestrator) Execute(ctx context.Context, cfg RunConfig) error {
 	var gpuScraper *GPUScraper
 	if strings.EqualFold(cfg.InstanceType.AcceleratorType, "gpu") {
 		totalMemGiB := float64(cfg.InstanceType.AcceleratorMemoryGiB)
-		gpuScraper = NewGPUScraper(modelName, 8000, totalMemGiB)
+		// Try to get node IP for DCGM metrics
+		nodeIP := o.getModelPodNodeIP(ctx, ns, modelName)
+		if nodeIP != "" {
+			log.Printf("[%s] DCGM scraping enabled (node %s)", cfg.RunID[:8], nodeIP)
+		}
+		gpuScraper = NewGPUScraperWithDCGM(modelName, 8000, totalMemGiB, nodeIP)
 		gpuScraper.Start(ctx)
 		log.Printf("[%s] started GPU metrics scraper", cfg.RunID[:8])
 	}
@@ -679,6 +684,26 @@ func (o *Orchestrator) cleanupResources(ctx context.Context, runID string) {
 	loadgenName := fmt.Sprintf("loadgen-%s", runID[:8])
 	configMapName := fmt.Sprintf("loadgen-config-%s", runID[:8])
 	o.teardown(ctx, ns, modelName, loadgenName, configMapName)
+}
+
+// getModelPodNodeIP returns the node IP where the model pod is running.
+// Returns empty string if the pod is not found or node IP cannot be determined.
+func (o *Orchestrator) getModelPodNodeIP(ctx context.Context, ns, deploymentName string) string {
+	// List pods for this deployment
+	pods, err := o.client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/name=%s", deploymentName),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return ""
+	}
+
+	// Get the first running pod's node IP
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodRunning && pod.Status.HostIP != "" {
+			return pod.Status.HostIP
+		}
+	}
+	return ""
 }
 
 // recordOOMEvent saves an OOM event to the database.

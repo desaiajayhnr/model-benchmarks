@@ -117,6 +117,13 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 	// GPU scraper config for per-scenario metrics
 	isGPU := strings.EqualFold(instType.AcceleratorType, "gpu")
 	totalMemGiB := float64(instType.AcceleratorMemoryGiB)
+	var nodeIP string
+	if isGPU {
+		nodeIP = o.getModelPodNodeIP(ctx, ns, modelName)
+		if nodeIP != "" {
+			log.Printf("[suite %s] DCGM scraping enabled (node %s)", suiteRunID[:8], nodeIP)
+		}
+	}
 
 	// Execute each scenario sequentially
 	for i, scenarioID := range suite.Scenarios {
@@ -135,7 +142,7 @@ func (o *Orchestrator) ExecuteSuite(ctx context.Context, suiteRunID string, req 
 		// Start GPU scraper for this scenario
 		var gpuScraper *GPUScraper
 		if isGPU {
-			gpuScraper = NewGPUScraper(modelName, 8000, totalMemGiB)
+			gpuScraper = NewGPUScraperWithDCGM(modelName, 8000, totalMemGiB, nodeIP)
 			gpuScraper.Start(ctx)
 		}
 

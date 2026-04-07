@@ -431,3 +431,74 @@ resource "kubectl_manifest" "neuron_device_plugin" {
 
   depends_on = [kubectl_manifest.neuron_device_plugin_binding]
 }
+
+# ---------- DCGM Exporter for GPU Metrics ----------
+resource "kubectl_manifest" "dcgm_exporter" {
+  server_side_apply  = true
+  force_conflicts    = true
+  wait               = false
+  wait_for_rollout   = false
+
+  yaml_body = <<-YAML
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: dcgm-exporter
+      namespace: kube-system
+      labels:
+        app.kubernetes.io/name: dcgm-exporter
+    spec:
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: dcgm-exporter
+      updateStrategy:
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: dcgm-exporter
+        spec:
+          priorityClassName: system-node-critical
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: karpenter.k8s.aws/instance-category
+                        operator: In
+                        values: ["g", "p"]
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+            - key: CriticalAddonsOnly
+              operator: Exists
+          containers:
+            - name: dcgm-exporter
+              image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
+              ports:
+                - name: metrics
+                  containerPort: 9400
+                  hostPort: 9400
+              env:
+                - name: DCGM_EXPORTER_LISTEN
+                  value: ":9400"
+                - name: DCGM_EXPORTER_KUBERNETES
+                  value: "true"
+              securityContext:
+                runAsNonRoot: false
+                runAsUser: 0
+                capabilities:
+                  add: ["SYS_ADMIN"]
+              volumeMounts:
+                - name: pod-resources
+                  mountPath: /var/lib/kubelet/pod-resources
+                  readOnly: true
+          volumes:
+            - name: pod-resources
+              hostPath:
+                path: /var/lib/kubelet/pod-resources
+  YAML
+
+  depends_on = [kubectl_manifest.nvidia_device_plugin]
+}
