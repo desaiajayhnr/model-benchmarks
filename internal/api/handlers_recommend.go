@@ -39,13 +39,15 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	hfToken := r.Header.Get("X-HF-Token")
 
 	// Parse optional parameters
-	var tp, maxModelLen, concurrency int
+	var tp, maxModelLen, concurrency, inputSeqLen, outputSeqLen int
 	var overheadGiB float64
 	var quant string
 
 	fmt.Sscanf(q.Get("tp"), "%d", &tp)
 	fmt.Sscanf(q.Get("max_model_len"), "%d", &maxModelLen)
 	fmt.Sscanf(q.Get("concurrency"), "%d", &concurrency)
+	fmt.Sscanf(q.Get("input_seq_len"), "%d", &inputSeqLen)
+	fmt.Sscanf(q.Get("output_seq_len"), "%d", &outputSeqLen)
 	fmt.Sscanf(q.Get("overhead_gib"), "%f", &overheadGiB)
 	quant = q.Get("quantization")
 
@@ -72,7 +74,7 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use defaults if not specified
+	// Use defaults if not specified (matching Recommend() defaults)
 	if tp <= 0 {
 		tp = 1
 	}
@@ -81,6 +83,12 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	}
 	if concurrency <= 0 {
 		concurrency = 1
+	}
+	if inputSeqLen <= 0 {
+		inputSeqLen = 512 // Default matches Recommend()
+	}
+	if outputSeqLen <= 0 {
+		outputSeqLen = 256 // Default matches Recommend()
 	}
 	if quant == "" {
 		if modelCfg.TorchDtype != "" {
@@ -109,6 +117,8 @@ func (s *Server) handleMemoryBreakdown(w http.ResponseWriter, r *http.Request) {
 		quant,
 		kvPerToken,
 		maxModelLen,
+		inputSeqLen,
+		outputSeqLen,
 		concurrency,
 		overheadBytes,
 		tp,

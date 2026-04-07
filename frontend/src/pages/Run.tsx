@@ -157,6 +157,8 @@ export default function Run() {
           tp: form.tensor_parallel_degree,
           quantization: form.quantization || undefined,
           maxModelLen: form.max_model_len || undefined,
+          inputSeqLen: form.input_sequence_length,
+          outputSeqLen: form.output_sequence_length,
           concurrency: form.concurrency,
           overheadGiB: form.overhead_gib || undefined,
           hfToken: form.hf_token || undefined,

@@ -155,6 +155,8 @@ export interface MemoryBreakdownParams {
   tp?: number;
   quantization?: string;
   maxModelLen?: number;
+  inputSeqLen?: number;
+  outputSeqLen?: number;
   concurrency?: number;
   overheadGiB?: number;
   hfToken?: string;
@@ -170,6 +172,8 @@ export async function getMemoryBreakdown(
   if (params.tp) urlParams.set("tp", String(params.tp));
   if (params.quantization) urlParams.set("quantization", params.quantization);
   if (params.maxModelLen) urlParams.set("max_model_len", String(params.maxModelLen));
+  if (params.inputSeqLen) urlParams.set("input_seq_len", String(params.inputSeqLen));
+  if (params.outputSeqLen) urlParams.set("output_seq_len", String(params.outputSeqLen));
   if (params.concurrency) urlParams.set("concurrency", String(params.concurrency));
   if (params.overheadGiB) urlParams.set("overhead_gib", String(params.overheadGiB));
 

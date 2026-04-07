@@ -64,11 +64,14 @@ func BlockTableBytes(maxModelLen, concurrency int) float64 {
 }
 
 // CalculateMemoryBreakdown computes a detailed memory breakdown given configuration.
+// inputSeqLen and outputSeqLen should match the benchmark workload (e.g., 512+256).
 func CalculateMemoryBreakdown(
 	params int64,
 	quant string,
 	kvPerTokenBytes float64,
 	maxModelLen int,
+	inputSeqLen int,
+	outputSeqLen int,
 	concurrency int,
 	overheadBytes float64,
 	tpDegree int,
@@ -78,8 +81,9 @@ func CalculateMemoryBreakdown(
 	quantMetadata := QuantizationMetadataBytes(params, quant)
 	blockTable := BlockTableBytes(maxModelLen, concurrency)
 
-	// KV cache: tokens * kvPerToken for all concurrent sequences
-	avgSeqLen := float64(maxModelLen) * 0.5 // Assume 50% average utilization
+	// KV cache: based on actual workload sequence length, not max context
+	// This matches how Recommend() calculates concurrency
+	avgSeqLen := float64(inputSeqLen + outputSeqLen)
 	kvCacheBytes := kvPerTokenBytes * avgSeqLen * float64(concurrency)
 
 	totalUsed := modelWeights + quantMetadata + blockTable + kvCacheBytes + overheadBytes
