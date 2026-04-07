@@ -39,6 +39,15 @@ func (s *Scenario) TotalDuration() int {
 	return total
 }
 
+// TargetQPS returns the target requests per second for this scenario.
+// For multi-stage scenarios, returns the final (peak) stage rate.
+func (s *Scenario) TargetQPS() int {
+	if len(s.Stages) == 0 {
+		return 0
+	}
+	return s.Stages[len(s.Stages)-1].Rate
+}
+
 // ToInferencePerfConfig converts a Scenario to InferencePerfConfigParams.
 // modelHfID and targetHost/Port are provided by the orchestrator.
 func (s *Scenario) ToInferencePerfConfig(modelHfID, targetHost string, targetPort int) manifest.InferencePerfConfigParams {

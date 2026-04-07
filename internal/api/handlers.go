@@ -909,10 +909,18 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		Total     int                `json:"total"`
 		Scenarios []scenarioProgress `json:"scenarios"`
 	}
+	type scenarioDefinition struct {
+		ID              string `json:"id"`
+		Name            string `json:"name"`
+		TargetQPS       int    `json:"target_qps"`
+		DurationSeconds int    `json:"duration_seconds"`
+		LoadType        string `json:"load_type"`
+	}
 	type suiteRunResponse struct {
 		*database.TestSuiteRun
-		Progress progressInfo              `json:"progress"`
-		Results  []database.ScenarioResult `json:"results"`
+		Progress            progressInfo              `json:"progress"`
+		Results             []database.ScenarioResult `json:"results"`
+		ScenarioDefinitions []scenarioDefinition      `json:"scenario_definitions"`
 	}
 
 	completed := 0
@@ -924,6 +932,20 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Build scenario definitions with target QPS for charts
+	scenarioDefs := make([]scenarioDefinition, 0, len(results))
+	for _, r := range results {
+		if sc := scenario.Get(r.ScenarioID); sc != nil {
+			scenarioDefs = append(scenarioDefs, scenarioDefinition{
+				ID:              sc.ID,
+				Name:            sc.Name,
+				TargetQPS:       sc.TargetQPS(),
+				DurationSeconds: sc.TotalDuration(),
+				LoadType:        sc.LoadType,
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, suiteRunResponse{
 		TestSuiteRun: suiteRun,
 		Progress: progressInfo{
@@ -931,7 +953,8 @@ func (s *Server) handleGetSuiteRun(w http.ResponseWriter, r *http.Request) {
 			Total:     len(results),
 			Scenarios: scenarios,
 		},
-		Results: results,
+		Results:             results,
+		ScenarioDefinitions: scenarioDefs,
 	})
 }
 
