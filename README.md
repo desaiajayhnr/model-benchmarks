@@ -98,11 +98,19 @@ terraform apply
 
 ### 2. Container Images
 
-Build and push the four container images:
+Build and push the five container images:
 
 ```bash
-# Set your registry
-REGISTRY=<account-id>.dkr.ecr.<region>.amazonaws.com
+# Set your registry (Terraform creates ECR repos for api, web, migration, loadgen)
+export REGION=us-west-2
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export REGISTRY=${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
+
+# Create the tools ECR repo (not managed by Terraform)
+aws ecr create-repository --repository-name accelbench-tools --region $REGION --image-tag-mutability MUTABLE
+
+# Login to ECR
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $REGISTRY
 
 # API server (also includes pricingrefresh binary)
 docker buildx build --platform linux/amd64 \
@@ -128,6 +136,23 @@ docker buildx build --platform linux/amd64 \
 docker buildx build --platform linux/amd64 \
   -f docker/Dockerfile.migration \
   -t $REGISTRY/accelbench-migration:latest --push .
+```
+
+> **Apple Silicon (M-series Mac):** If you see QEMU segfaults with `docker buildx`, use Podman and build without `--platform` — the Dockerfiles use Go cross-compilation and `--platform=linux/amd64` on final stages to produce amd64 images natively.
+
+After building, update `helm/accelbench/values.yaml` with your image repositories:
+
+```bash
+cd helm/accelbench
+sed -i.bak \
+  -e "s|repository: \"\".*# Required:.*accelbench-api|repository: \"${REGISTRY}/accelbench-api\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-web|repository: \"${REGISTRY}/accelbench-web\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-tools|repository: \"${REGISTRY}/accelbench-tools\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-loadgen|repository: \"${REGISTRY}/accelbench-loadgen\"|" \
+  -e "s|repository: \"\".*# Required:.*accelbench-migration|repository: \"${REGISTRY}/accelbench-migration\"|" \
+  values.yaml
+rm -f values.yaml.bak
+cd ../..
 ```
 
 ### 3. Database Secret
@@ -165,13 +190,8 @@ cd helm/accelbench
 
 helm install accelbench . \
   --namespace accelbench \
-  --set image.api.repository=$REGISTRY/accelbench-api \
-  --set image.web.repository=$REGISTRY/accelbench-web \
-  --set image.migration.repository=$REGISTRY/accelbench-migration \
-  --set image.loadgen.repository=$REGISTRY/accelbench-loadgen \
-  --set image.tools.repository=$REGISTRY/accelbench-tools \
   --set database.existingSecret=accelbench-db \
-  --set results.s3Bucket=accelbench-results-$(aws sts get-caller-identity --query Account --output text) \
+  --set results.s3Bucket=accelbench-results-${ACCOUNT_ID} \
   --set ingress.host=your-domain.example.com
 ```
 
