@@ -22,7 +22,9 @@ resource "helm_release" "karpenter" {
   repository       = "oci://public.ecr.aws/karpenter"
   chart            = "karpenter"
   version          = var.karpenter_version
-  wait             = false
+  wait             = true
+  wait_for_jobs    = true
+  timeout          = 600
 
   values = [
     <<-EOT
@@ -34,6 +36,11 @@ resource "helm_release" "karpenter" {
   ]
 
   depends_on = [module.karpenter]
+}
+
+resource "time_sleep" "wait_for_karpenter" {
+  depends_on      = [helm_release.karpenter]
+  create_duration = "30s"
 }
 
 resource "kubectl_manifest" "default_node_class" {
@@ -62,7 +69,7 @@ resource "kubectl_manifest" "default_node_class" {
         karpenter.sh/discovery: ${var.cluster_name}
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "general_purpose_node_pool" {
@@ -128,7 +135,7 @@ resource "kubectl_manifest" "gpu_node_class" {
             encrypted: true
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "neuron_node_class" {
@@ -155,7 +162,7 @@ resource "kubectl_manifest" "neuron_node_class" {
             encrypted: true
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "gpu_node_pool" {
@@ -191,7 +198,7 @@ resource "kubectl_manifest" "gpu_node_pool" {
         consolidateAfter: 10m
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "neuron_node_pool" {
@@ -227,11 +234,16 @@ resource "kubectl_manifest" "neuron_node_pool" {
         consolidateAfter: 10m
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 # ---------- NVIDIA Device Plugin ----------
 resource "kubectl_manifest" "nvidia_device_plugin" {
+  server_side_apply  = true
+  force_conflicts    = true
+  wait               = false
+  wait_for_rollout   = false
+
   yaml_body = <<-YAML
     apiVersion: apps/v1
     kind: DaemonSet
@@ -283,11 +295,14 @@ resource "kubectl_manifest" "nvidia_device_plugin" {
                 path: /var/lib/kubelet/device-plugins
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 # ---------- Neuron Device Plugin ----------
 resource "kubectl_manifest" "neuron_device_plugin_sa" {
+  server_side_apply = true
+  force_conflicts   = true
+
   yaml_body = <<-YAML
     apiVersion: v1
     kind: ServiceAccount
@@ -296,10 +311,13 @@ resource "kubectl_manifest" "neuron_device_plugin_sa" {
       namespace: kube-system
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [kubectl_manifest.nvidia_device_plugin]
 }
 
 resource "kubectl_manifest" "neuron_device_plugin_role" {
+  server_side_apply = true
+  force_conflicts   = true
+
   yaml_body = <<-YAML
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
@@ -317,10 +335,13 @@ resource "kubectl_manifest" "neuron_device_plugin_role" {
         verbs: ["get", "list", "watch"]
   YAML
 
-  depends_on = [helm_release.karpenter]
+  depends_on = [time_sleep.wait_for_karpenter]
 }
 
 resource "kubectl_manifest" "neuron_device_plugin_binding" {
+  server_side_apply = true
+  force_conflicts   = true
+
   yaml_body = <<-YAML
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -340,6 +361,11 @@ resource "kubectl_manifest" "neuron_device_plugin_binding" {
 }
 
 resource "kubectl_manifest" "neuron_device_plugin" {
+  server_side_apply  = true
+  force_conflicts    = true
+  wait               = false
+  wait_for_rollout   = false
+
   yaml_body = <<-YAML
     apiVersion: apps/v1
     kind: DaemonSet

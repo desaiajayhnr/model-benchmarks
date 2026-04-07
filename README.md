@@ -125,7 +125,35 @@ docker buildx build --platform linux/amd64 \
   -t $REGISTRY/accelbench-migration:latest --push .
 ```
 
-### 3. Application (Helm)
+### 3. Database Secret
+
+The Aurora master password is stored in AWS Secrets Manager. Fetch it and create a Kubernetes secret before installing the Helm chart:
+
+```bash
+# Get the Aurora secret ARN from Terraform
+SECRET_ARN=$(cd terraform && terraform output -raw aurora_master_user_secret | jq -r '.[0].secret_arn')
+
+# Fetch the credentials from Secrets Manager
+DB_CREDS=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text)
+DB_USER=$(echo "$DB_CREDS" | jq -r '.username')
+DB_PASS=$(echo "$DB_CREDS" | jq -r '.password')
+DB_HOST=$(cd terraform && terraform output -raw aurora_cluster_endpoint)
+
+# URL-encode the password (required — Aurora passwords contain special characters)
+DB_PASS_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${DB_PASS}', safe=''))")
+
+# Create the namespace with Helm ownership labels
+kubectl create namespace accelbench
+kubectl label namespace accelbench app.kubernetes.io/managed-by=Helm
+kubectl annotate namespace accelbench meta.helm.sh/release-name=accelbench meta.helm.sh/release-namespace=accelbench
+
+# Create the database secret
+kubectl create secret generic accelbench-db \
+  --namespace accelbench \
+  --from-literal=DATABASE_URL="postgres://${DB_USER}:${DB_PASS_ENCODED}@${DB_HOST}:5432/accelbench?sslmode=require"
+```
+
+### 4. Application (Helm)
 
 ```bash
 cd helm/accelbench
@@ -149,7 +177,7 @@ The Helm chart deploys:
 - ALB Ingress
 - RBAC for the API server to manage benchmark workloads
 
-### 4. IAM (Pod Identity)
+### 5. IAM (Pod Identity)
 
 The pricing refresh CronJob needs `pricing:GetProducts` permission. Create an IAM role with a Pod Identity trust policy:
 
