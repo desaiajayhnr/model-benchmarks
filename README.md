@@ -177,39 +177,7 @@ The Helm chart deploys:
 - ALB Ingress
 - RBAC for the API server to manage benchmark workloads
 
-### 5. IAM (Pod Identity)
-
-The pricing refresh CronJob needs `pricing:GetProducts` permission. Create an IAM role with a Pod Identity trust policy:
-
-```bash
-# Create IAM role and pod identity association
-aws iam create-role --role-name accelbench-api \
-  --assume-role-policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Principal": {"Service": "pods.eks.amazonaws.com"},
-      "Action": ["sts:AssumeRole", "sts:TagSession"]
-    }]
-  }'
-
-aws iam put-role-policy --role-name accelbench-api \
-  --policy-name pricing-access \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": "pricing:GetProducts",
-      "Resource": "*"
-    }]
-  }'
-
-aws eks create-pod-identity-association \
-  --cluster-name <cluster-name> \
-  --namespace accelbench \
-  --service-account accelbench-api \
-  --role-arn arn:aws:iam::<account-id>:role/accelbench-api
-```
+> **Note:** IAM roles and Pod Identity associations for the API server (pricing access) and load generator (S3 access) are created automatically by Terraform in step 1.
 
 ## API Endpoints
 
