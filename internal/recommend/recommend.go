@@ -33,6 +33,10 @@ type ModelConfig struct {
 	// More accurate than ParameterCount * bytesPerDtype for mixed-precision models.
 	// If 0, fall back to calculating from ParameterCount.
 	ActualMemoryBytes int64 `json:"actual_memory_bytes"`
+
+	// TransformersVersion required by this model (from config.json).
+	// Used to detect models that require a newer transformers version than vLLM bundles.
+	TransformersVersion string `json:"transformers_version,omitempty"`
 }
 
 // InstanceSpec holds GPU specs from the instance_types DB table.
@@ -108,7 +112,35 @@ const (
 	// vLLM reserves 10% for CUDA context and PyTorch allocator overhead.
 	gpuMemoryUtilization = 0.90
 	gibBytes             = 1024 * 1024 * 1024
+
+	// maxSupportedTransformersMajor is the highest major version of transformers
+	// that vLLM 0.19.0 supports. Models requiring 5.x or higher won't work.
+	maxSupportedTransformersMajor = 4
 )
+
+// isTransformersVersionUnsupported checks if the model requires a transformers
+// version that's too new for the current vLLM version.
+// Returns (true, reason) if unsupported, (false, "") if supported or unknown.
+func isTransformersVersionUnsupported(version string) (bool, string) {
+	if version == "" {
+		return false, "" // Unknown version, assume compatible
+	}
+
+	// Parse major version from strings like "4.45.0", "5.3.0", "5.5.0.dev0"
+	var major int
+	if _, err := fmt.Sscanf(version, "%d.", &major); err != nil {
+		return false, "" // Can't parse, assume compatible
+	}
+
+	if major > maxSupportedTransformersMajor {
+		return true, fmt.Sprintf(
+			"Model requires transformers %s but vLLM 0.19.0 only supports transformers 4.x. "+
+				"This model architecture is too new. Wait for a newer vLLM release or use a different model.",
+			version)
+	}
+
+	return false, ""
+}
 
 // bytesPerParam returns the bytes per parameter for a given dtype/quantization.
 func bytesPerParam(quant string) float64 {
@@ -267,6 +299,28 @@ func DefaultOverheadGiB(cfg ModelConfig) float64 {
 // Recommend computes configuration recommendations given model and instance specs.
 // allInstances is used to suggest a larger instance when the model doesn't fit.
 func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, opts RecommendOptions) *Recommendation {
+	// Check if the model requires a transformers version that's too new for vLLM.
+	// vLLM 0.19.0 bundles transformers 4.x; models requiring 5.x won't work.
+	if unsupported, reason := isTransformersVersionUnsupported(cfg.TransformersVersion); unsupported {
+		return &Recommendation{
+			ModelInfo: ModelInfo{
+				ParameterCount:        cfg.ParameterCount,
+				NativeDtype:           nativeDtype(cfg),
+				MaxPositionEmbeddings: cfg.MaxPositionEmbeddings,
+				Architecture:          cfg.ModelType,
+			},
+			InstanceInfo: InstanceInfo{
+				AcceleratorCount:     inst.AcceleratorCount,
+				AcceleratorMemoryGiB: inst.AcceleratorMemoryGiB,
+				AcceleratorName:      inst.AcceleratorName,
+			},
+			Explanation: Explanation{
+				Feasible: false,
+				Reason:   reason,
+			},
+		}
+	}
+
 	dtype := nativeDtype(cfg)
 	perDeviceGiB := float64(inst.AcceleratorMemoryGiB) / float64(inst.AcceleratorCount)
 	perDeviceBytes := perDeviceGiB * gibBytes

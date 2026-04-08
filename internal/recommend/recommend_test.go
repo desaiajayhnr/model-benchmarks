@@ -501,3 +501,57 @@ func TestModelMemoryBytes(t *testing.T) {
 		t.Errorf("modelMemoryBytes(7B, int4) = %v, want %v", mem4, wantBytes4)
 	}
 }
+
+func TestTransformersVersionCheck(t *testing.T) {
+	tests := []struct {
+		version     string
+		unsupported bool
+	}{
+		{"", false},           // Empty = assume compatible
+		{"4.45.0", false},     // 4.x is supported
+		{"4.0.0", false},      // Old 4.x is supported
+		{"5.0.0", true},       // 5.x is too new
+		{"5.3.0", true},       // 5.3 is too new
+		{"5.5.0.dev0", true},  // Dev version of 5.x is too new
+		{"invalid", false},    // Can't parse = assume compatible
+	}
+
+	for _, tc := range tests {
+		unsupported, reason := isTransformersVersionUnsupported(tc.version)
+		if unsupported != tc.unsupported {
+			t.Errorf("isTransformersVersionUnsupported(%q) = %v, want %v (reason: %s)",
+				tc.version, unsupported, tc.unsupported, reason)
+		}
+	}
+}
+
+func TestRecommendUnsupportedTransformersVersion(t *testing.T) {
+	// Model that requires transformers 5.x (like Gemma 4 or HybridQwen3)
+	model := ModelConfig{
+		ParameterCount:        32_000_000_000,
+		HiddenSize:            4096,
+		NumAttentionHeads:     32,
+		NumKeyValueHeads:      8,
+		NumHiddenLayers:       40,
+		MaxPositionEmbeddings: 32768,
+		TorchDtype:            "bfloat16",
+		ModelType:             "hybrid_qwen3",
+		TransformersVersion:   "5.3.0", // Too new for vLLM 0.19.0
+	}
+	inst := InstanceSpec{
+		Name: "p5.48xlarge", AcceleratorType: "GPU", AcceleratorName: "H100",
+		AcceleratorCount: 8, AcceleratorMemoryGiB: 640,
+	}
+
+	rec := Recommend(model, inst, allInstances, RecommendOptions{})
+
+	if rec.Explanation.Feasible {
+		t.Error("expected infeasible for model requiring transformers 5.x")
+	}
+	if !strings.Contains(rec.Explanation.Reason, "transformers") {
+		t.Errorf("expected reason to mention transformers, got: %s", rec.Explanation.Reason)
+	}
+	if !strings.Contains(rec.Explanation.Reason, "5.3.0") {
+		t.Errorf("expected reason to mention required version, got: %s", rec.Explanation.Reason)
+	}
+}

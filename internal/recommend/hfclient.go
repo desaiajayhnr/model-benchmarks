@@ -79,6 +79,9 @@ type hfConfigJSON struct {
 	VocabSize             int    `json:"vocab_size"`
 	IntermediateSize      int    `json:"intermediate_size"`
 
+	// Transformers version required by this model (e.g., "4.45.0", "5.3.0")
+	TransformersVersion string `json:"transformers_version"`
+
 	// Sliding window attention (Mistral, Mixtral, etc.)
 	// If set, KV cache is capped at this size instead of max_position_embeddings.
 	SlidingWindow *int `json:"sliding_window"`
@@ -163,7 +166,8 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 		NumHiddenLayers:       srcCfg.NumHiddenLayers,
 		MaxPositionEmbeddings: srcCfg.MaxPositionEmbeddings,
 		TorchDtype:            srcCfg.TorchDtype,
-		ModelType:             cr.config.ModelType, // Keep top-level model_type
+		ModelType:             cr.config.ModelType,             // Keep top-level model_type
+		TransformersVersion:   cr.config.TransformersVersion,   // Keep top-level transformers_version
 	}
 
 	// Sliding window attention (Mistral, Mixtral, etc.)
