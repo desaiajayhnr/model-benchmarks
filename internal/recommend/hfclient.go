@@ -64,6 +64,9 @@ type hfConfigJSON struct {
 	FirstKDenseReplace  int `json:"first_k_dense_replace"`
 	// Mixtral-style MoE
 	NumLocalExperts int `json:"num_local_experts"`
+
+	// Multimodal models (Gemma 4, LLaVA, etc.) nest LLM config under text_config
+	TextConfig *hfConfigJSON `json:"text_config"`
 }
 
 // FetchModelConfig fetches model metadata from HuggingFace and returns a
@@ -118,19 +121,25 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 		return nil, cr.err
 	}
 
+	// For multimodal models (Gemma 4, LLaVA, etc.), LLM config is nested under text_config
+	srcCfg := cr.config
+	if srcCfg.TextConfig != nil && srcCfg.HiddenSize == 0 {
+		srcCfg = srcCfg.TextConfig
+	}
+
 	cfg := &ModelConfig{
-		HiddenSize:            cr.config.HiddenSize,
-		NumAttentionHeads:     cr.config.NumAttentionHeads,
-		NumKeyValueHeads:      cr.config.NumKeyValueHeads,
-		NumHiddenLayers:       cr.config.NumHiddenLayers,
-		MaxPositionEmbeddings: cr.config.MaxPositionEmbeddings,
-		TorchDtype:            cr.config.TorchDtype,
-		ModelType:             cr.config.ModelType,
+		HiddenSize:            srcCfg.HiddenSize,
+		NumAttentionHeads:     srcCfg.NumAttentionHeads,
+		NumKeyValueHeads:      srcCfg.NumKeyValueHeads,
+		NumHiddenLayers:       srcCfg.NumHiddenLayers,
+		MaxPositionEmbeddings: srcCfg.MaxPositionEmbeddings,
+		TorchDtype:            srcCfg.TorchDtype,
+		ModelType:             cr.config.ModelType, // Keep top-level model_type
 	}
 
 	// Sliding window attention (Mistral, Mixtral, etc.)
-	if cr.config.SlidingWindow != nil && *cr.config.SlidingWindow > 0 {
-		cfg.SlidingWindow = *cr.config.SlidingWindow
+	if srcCfg.SlidingWindow != nil && *srcCfg.SlidingWindow > 0 {
+		cfg.SlidingWindow = *srcCfg.SlidingWindow
 	}
 
 	if mr.model.Safetensors != nil && mr.model.Safetensors.Total > 0 {
@@ -139,7 +148,7 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 	if cfg.ParameterCount == 0 {
 		// Safetensors metadata unavailable (common for MoE models like
 		// DeepSeek-V3). Estimate from architecture config.
-		cfg.ParameterCount = estimateParameterCount(cr.config)
+		cfg.ParameterCount = estimateParameterCount(srcCfg)
 	}
 	if mr.model.Config != nil && cfg.ModelType == "" {
 		cfg.ModelType = mr.model.Config.ModelType
