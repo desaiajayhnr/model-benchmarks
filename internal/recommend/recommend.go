@@ -22,6 +22,17 @@ type ModelConfig struct {
 	ModelType             string  `json:"model_type"`
 	Architecture          string  `json:"architecture"`
 	SlidingWindow         int     `json:"sliding_window"` // 0 = no sliding window (full attention)
+
+	// Pre-quantization info (from quantization_config in HuggingFace config.json)
+	// If set, the model is already quantized and we should not apply additional quantization.
+	PreQuantized   bool   `json:"pre_quantized"`    // true if model has quantization_config
+	PreQuantMethod string `json:"pre_quant_method"` // "gptq", "awq", "modelopt", "bitsandbytes"
+	PreQuantBits   int    `json:"pre_quant_bits"`   // 4 or 8
+
+	// Actual model memory calculated from safetensors dtype breakdown.
+	// More accurate than ParameterCount * bytesPerDtype for mixed-precision models.
+	// If 0, fall back to calculating from ParameterCount.
+	ActualMemoryBytes int64 `json:"actual_memory_bytes"`
 }
 
 // InstanceSpec holds GPU specs from the instance_types DB table.
@@ -261,8 +272,30 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	perDeviceBytes := perDeviceGiB * gibBytes
 	usablePerDevice := perDeviceBytes * gpuMemoryUtilization
 
+	// Calculate model memory:
+	// 1. Use ActualMemoryBytes from safetensors dtype breakdown (most accurate for mixed-precision)
+	// 2. Fall back to PreQuantBits calculation for pre-quantized models
+	// 3. Fall back to native dtype calculation
+	var modelMemEffective float64
+	if cfg.ActualMemoryBytes > 0 {
+		// Use actual memory from safetensors dtype breakdown (most accurate)
+		modelMemEffective = float64(cfg.ActualMemoryBytes)
+	} else if cfg.PreQuantized && cfg.PreQuantBits > 0 {
+		// Fall back to pre-quantization bit width
+		effectiveDtype := dtype
+		switch cfg.PreQuantBits {
+		case 4:
+			effectiveDtype = "int4"
+		case 8:
+			effectiveDtype = "int8"
+		}
+		modelMemEffective = modelMemoryBytes(cfg.ParameterCount, effectiveDtype)
+	} else {
+		// Use native precision
+		modelMemEffective = modelMemoryBytes(cfg.ParameterCount, dtype)
+	}
 	modelMemNative := modelMemoryBytes(cfg.ParameterCount, dtype)
-	minGPUs := int(math.Ceil(modelMemNative / usablePerDevice))
+	minGPUs := int(math.Ceil(modelMemEffective / usablePerDevice))
 	if minGPUs < 1 {
 		minGPUs = 1
 	}
@@ -288,7 +321,46 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	var chosenQuant string // "" means native precision
 	totalUsableBytes := usablePerDevice * float64(inst.AcceleratorCount)
 
-	if modelMemNative <= totalUsableBytes {
+	// Handle pre-quantized models: use their actual size, don't suggest additional quantization
+	if cfg.PreQuantized {
+		if modelMemEffective <= totalUsableBytes {
+			// Pre-quantized model fits
+			tp := maxValidTPDegree(minGPUs, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)
+			if opts.TPOverride > 0 && opts.TPOverride >= minGPUs && opts.TPOverride <= inst.AcceleratorCount {
+				if cfg.NumAttentionHeads%opts.TPOverride == 0 && cfg.NumKeyValueHeads%opts.TPOverride == 0 {
+					tp = opts.TPOverride
+				}
+			}
+			rec.TensorParallelDegree = tp
+			rec.Quantization = nil // Don't apply additional quantization
+			chosenQuant = dtype    // KV cache uses native dtype even for pre-quantized models
+			rec.Explanation.Quantization = fmt.Sprintf("Model is pre-quantized (%s, %d-bit). Actual weights: %.1f GiB, available: %.0f GiB.",
+				cfg.PreQuantMethod, cfg.PreQuantBits, modelMemEffective/gibBytes, totalUsableBytes/gibBytes)
+			rec.Explanation.TensorParallelDegree = fmt.Sprintf("TP=%d: pre-quantized model requires %.1f GiB, each %s has %.0f GiB.",
+				tp, modelMemEffective/gibBytes, inst.AcceleratorName, perDeviceGiB)
+		} else {
+			// Pre-quantized model doesn't fit - can't quantize further
+			rec.Explanation.Feasible = false
+			rec.Explanation.Reason = fmt.Sprintf("Pre-quantized model (%s, %d-bit) requires %.1f GiB but only %.0f GiB available on %s. Use a larger instance.",
+				cfg.PreQuantMethod, cfg.PreQuantBits, modelMemEffective/gibBytes, totalUsableBytes/gibBytes, inst.Name)
+
+			// Find a larger instance
+			if len(allInstances) > 0 {
+				for _, alt := range allInstances {
+					if !strings.EqualFold(alt.AcceleratorType, "gpu") {
+						continue
+					}
+					altTotal := float64(alt.AcceleratorMemoryGiB) * gibBytes * gpuMemoryUtilization
+					if modelMemEffective <= altTotal && alt.AcceleratorMemoryGiB > inst.AcceleratorMemoryGiB {
+						rec.Alternatives = &Alternatives{LargerInstance: alt.Name}
+						rec.Explanation.SuggestedInstance = alt.Name
+						break
+					}
+				}
+			}
+			return rec
+		}
+	} else if modelMemNative <= totalUsableBytes {
 		// Fits at native precision.
 		// Default to max valid TP to use all GPUs; allow user override.
 		tp := maxValidTPDegree(minGPUs, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)

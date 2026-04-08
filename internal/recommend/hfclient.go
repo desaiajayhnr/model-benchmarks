@@ -41,6 +41,32 @@ type hfModelResponse struct {
 	Gated any `json:"gated"`
 }
 
+// hfQuantizationConfig represents the quantization_config from HuggingFace config.json.
+// This indicates the model is pre-quantized (GPTQ, AWQ, NVFP4, bitsandbytes, etc.)
+type hfQuantizationConfig struct {
+	// Common fields across quantization methods
+	QuantMethod string `json:"quant_method"` // "gptq", "awq", "modelopt", "bitsandbytes"
+	Bits        int    `json:"bits"`         // GPTQ/AWQ: 4 or 8
+
+	// NVIDIA ModelOpt (NVFP4, etc.)
+	QuantAlgo    string                     `json:"quant_algo"` // "NVFP4"
+	ConfigGroups map[string]hfConfigGroup   `json:"config_groups"`
+
+	// bitsandbytes
+	LoadIn4Bit bool `json:"load_in_4bit"`
+	LoadIn8Bit bool `json:"load_in_8bit"`
+}
+
+// hfConfigGroup represents a quantization config group (for ModelOpt).
+type hfConfigGroup struct {
+	Weights *hfQuantBits `json:"weights"`
+}
+
+// hfQuantBits holds bit width info.
+type hfQuantBits struct {
+	NumBits int `json:"num_bits"`
+}
+
 // hfConfigJSON is the subset of a model's config.json we need.
 type hfConfigJSON struct {
 	HiddenSize            int    `json:"hidden_size"`
@@ -67,6 +93,9 @@ type hfConfigJSON struct {
 
 	// Multimodal models (Gemma 4, LLaVA, etc.) nest LLM config under text_config
 	TextConfig *hfConfigJSON `json:"text_config"`
+
+	// Pre-quantized models (GPTQ, AWQ, NVFP4, bitsandbytes)
+	QuantizationConfig *hfQuantizationConfig `json:"quantization_config"`
 }
 
 // FetchModelConfig fetches model metadata from HuggingFace and returns a
@@ -144,6 +173,8 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 
 	if mr.model.Safetensors != nil && mr.model.Safetensors.Total > 0 {
 		cfg.ParameterCount = mr.model.Safetensors.Total
+		// Calculate actual memory from dtype breakdown (more accurate for mixed-precision models)
+		cfg.ActualMemoryBytes = calculateMemoryFromDtypes(mr.model.Safetensors.Parameters)
 	}
 	if cfg.ParameterCount == 0 {
 		// Safetensors metadata unavailable (common for MoE models like
@@ -159,7 +190,81 @@ func (c *HFClient) FetchModelConfig(modelID, hfToken string) (*ModelConfig, erro
 		cfg.NumKeyValueHeads = cfg.NumAttentionHeads
 	}
 
+	// Extract pre-quantization info (GPTQ, AWQ, NVFP4, bitsandbytes, etc.)
+	// Check top-level config first, then text_config for multimodal models
+	qcfg := cr.config.QuantizationConfig
+	if qcfg == nil && srcCfg.QuantizationConfig != nil {
+		qcfg = srcCfg.QuantizationConfig
+	}
+	if qcfg != nil {
+		cfg.PreQuantized = true
+		cfg.PreQuantMethod = qcfg.QuantMethod
+		cfg.PreQuantBits = extractQuantBits(qcfg)
+	}
+
 	return cfg, nil
+}
+
+// extractQuantBits determines the bit width from a quantization config.
+func extractQuantBits(qcfg *hfQuantizationConfig) int {
+	// Direct bits field (GPTQ, AWQ)
+	if qcfg.Bits > 0 {
+		return qcfg.Bits
+	}
+
+	// ModelOpt (NVFP4, etc.) - check config_groups
+	for _, group := range qcfg.ConfigGroups {
+		if group.Weights != nil && group.Weights.NumBits > 0 {
+			return group.Weights.NumBits
+		}
+	}
+
+	// bitsandbytes
+	if qcfg.LoadIn4Bit {
+		return 4
+	}
+	if qcfg.LoadIn8Bit {
+		return 8
+	}
+
+	// Default to 4-bit if we can't determine
+	return 4
+}
+
+// calculateMemoryFromDtypes calculates actual model memory in bytes from safetensors dtype breakdown.
+// This is more accurate than ParameterCount * bytesPerDtype for mixed-precision models.
+func calculateMemoryFromDtypes(dtypes map[string]int64) int64 {
+	if len(dtypes) == 0 {
+		return 0
+	}
+
+	var totalBytes int64
+	for dtype, count := range dtypes {
+		bytesPerParam := dtypeBytesPerParam(dtype)
+		totalBytes += int64(float64(count) * bytesPerParam)
+	}
+	return totalBytes
+}
+
+// dtypeBytesPerParam returns bytes per parameter for a given dtype string from HuggingFace.
+func dtypeBytesPerParam(dtype string) float64 {
+	switch dtype {
+	// 32-bit formats
+	case "F32", "FP32", "float32":
+		return 4.0
+	// 16-bit formats
+	case "F16", "FP16", "float16", "BF16", "bfloat16":
+		return 2.0
+	// 8-bit formats
+	case "F8_E4M3", "F8_E5M2", "FP8", "INT8", "I8", "U8", "int8", "uint8":
+		return 1.0
+	// 4-bit formats
+	case "INT4", "I4", "U4", "int4", "uint4", "NF4", "FP4":
+		return 0.5
+	default:
+		// Unknown dtype - assume 2 bytes (FP16) as safe default
+		return 2.0
+	}
 }
 
 func (c *HFClient) doGet(url, hfToken string, out any) error {

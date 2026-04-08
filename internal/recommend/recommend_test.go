@@ -319,6 +319,138 @@ func TestRecommendWithPreQuantized(t *testing.T) {
 	}
 }
 
+func TestRecommendPreQuantizedNVFP4(t *testing.T) {
+	// Gemma-4-31B-IT-NVFP4: 31B params pre-quantized at 4-bit via NVIDIA ModelOpt.
+	// Native BF16 would require ~62 GiB, but 4-bit is ~15.5 GiB.
+	// Should fit on g5.12xlarge (4x A10G, 96 GiB total) without suggesting additional quantization.
+	model := ModelConfig{
+		ParameterCount:        31_000_000_000,
+		HiddenSize:            5120,
+		NumAttentionHeads:     40,
+		NumKeyValueHeads:      8,
+		NumHiddenLayers:       60,
+		MaxPositionEmbeddings: 32768,
+		TorchDtype:            "bfloat16",
+		ModelType:             "gemma4",
+		// Pre-quantization info from HuggingFace config.json
+		PreQuantized:   true,
+		PreQuantMethod: "modelopt",
+		PreQuantBits:   4,
+	}
+	inst := InstanceSpec{
+		Name: "g5.12xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G",
+		AcceleratorCount: 4, AcceleratorMemoryGiB: 96,
+	}
+
+	rec := Recommend(model, inst, allInstances, RecommendOptions{})
+
+	if !rec.Explanation.Feasible {
+		t.Fatalf("expected feasible for pre-quantized 4-bit model: %s", rec.Explanation.Reason)
+	}
+	// Should NOT suggest additional quantization for pre-quantized models
+	if rec.Quantization != nil {
+		t.Errorf("expected no additional quantization for pre-quantized model, got %s", *rec.Quantization)
+	}
+	// Explanation should mention pre-quantization
+	if !strings.Contains(rec.Explanation.Quantization, "pre-quantized") {
+		t.Errorf("expected explanation to mention pre-quantized, got: %s", rec.Explanation.Quantization)
+	}
+	if !strings.Contains(rec.Explanation.Quantization, "modelopt") {
+		t.Errorf("expected explanation to mention quantization method, got: %s", rec.Explanation.Quantization)
+	}
+}
+
+func TestRecommendPreQuantizedInfeasible(t *testing.T) {
+	// Pre-quantized model that's still too large for the instance.
+	// Should report infeasible without suggesting further quantization.
+	model := ModelConfig{
+		ParameterCount:        70_000_000_000,
+		HiddenSize:            8192,
+		NumAttentionHeads:     64,
+		NumKeyValueHeads:      8,
+		NumHiddenLayers:       80,
+		MaxPositionEmbeddings: 8192,
+		TorchDtype:            "bfloat16",
+		ModelType:             "llama",
+		// Already 4-bit quantized but still needs ~35 GiB
+		PreQuantized:   true,
+		PreQuantMethod: "gptq",
+		PreQuantBits:   4,
+	}
+	// Single A10G (24 GiB) - 4-bit 70B needs ~35 GiB, doesn't fit
+	inst := InstanceSpec{
+		Name: "g5.xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G",
+		AcceleratorCount: 1, AcceleratorMemoryGiB: 24,
+	}
+
+	rec := Recommend(model, inst, allInstances, RecommendOptions{})
+
+	if rec.Explanation.Feasible {
+		t.Error("expected infeasible for pre-quantized model that doesn't fit")
+	}
+	// Should mention it's pre-quantized and suggest a larger instance
+	if !strings.Contains(rec.Explanation.Reason, "Pre-quantized") {
+		t.Errorf("expected explanation to mention pre-quantized, got: %s", rec.Explanation.Reason)
+	}
+	if rec.Explanation.SuggestedInstance == "" {
+		t.Error("expected a larger instance suggestion")
+	}
+}
+
+func TestRecommendMixedPrecisionActualMemory(t *testing.T) {
+	// Test ActualMemoryBytes calculation for mixed-precision models like NVFP4.
+	// Simulates nvidia/Gemma-4-31B-IT-NVFP4 which has:
+	// - BF16: 10.46B params (20.9 GiB)
+	// - F8_E4M3: 1.3B params (1.3 GiB)
+	// - U8: 10.4B params (10.4 GiB)
+	// Total: ~33 GiB actual memory (NOT 10 GiB from 4-bit assumption)
+	const gibBytes = 1024 * 1024 * 1024
+	actualMemory := int64(33 * gibBytes) // 33 GiB actual memory from dtype breakdown
+
+	model := ModelConfig{
+		ParameterCount:        21_000_000_000, // Actual param count from HF
+		HiddenSize:            4096,
+		NumAttentionHeads:     32,
+		NumKeyValueHeads:      8,
+		NumHiddenLayers:       40,
+		MaxPositionEmbeddings: 32768,
+		TorchDtype:            "bfloat16",
+		ModelType:             "gemma4",
+		PreQuantized:          true,
+		PreQuantMethod:        "modelopt",
+		PreQuantBits:          4,
+		ActualMemoryBytes:     actualMemory, // Key: actual memory from safetensors breakdown
+	}
+
+	// Single L4 (24 GiB) - should NOT fit because actual memory is 33 GiB
+	inst := InstanceSpec{
+		Name: "g6.xlarge", AcceleratorType: "GPU", AcceleratorName: "L4",
+		AcceleratorCount: 1, AcceleratorMemoryGiB: 24,
+	}
+
+	rec := Recommend(model, inst, allInstances, RecommendOptions{})
+
+	if rec.Explanation.Feasible {
+		t.Errorf("expected infeasible: 33 GiB model on 24 GiB GPU. Got: %s", rec.Explanation.Quantization)
+	}
+
+	// Now test with g5.12xlarge (96 GiB) - should fit
+	inst2 := InstanceSpec{
+		Name: "g5.12xlarge", AcceleratorType: "GPU", AcceleratorName: "A10G",
+		AcceleratorCount: 4, AcceleratorMemoryGiB: 96,
+	}
+
+	rec2 := Recommend(model, inst2, allInstances, RecommendOptions{})
+
+	if !rec2.Explanation.Feasible {
+		t.Fatalf("expected feasible on 96 GiB: %s", rec2.Explanation.Reason)
+	}
+	// Should use actual memory in explanation (33 GiB, not 10.5 from 4-bit assumption)
+	if !strings.Contains(rec2.Explanation.Quantization, "33") {
+		t.Errorf("expected explanation to show ~33 GiB actual memory, got: %s", rec2.Explanation.Quantization)
+	}
+}
+
 func TestRecommend8B_SingleL4_MaxModelLen(t *testing.T) {
 	// DeepSeek-R1-Distill-Llama-8B on a single L4 (24 GiB).
 	// With empirical overhead estimation (1.3x model size for single GPU),
