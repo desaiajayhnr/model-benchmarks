@@ -394,6 +394,9 @@ func (s *Server) handleRecommend(w http.ResponseWriter, r *http.Request) {
 	if overheadStr := r.URL.Query().Get("overhead_gib"); overheadStr != "" {
 		fmt.Sscanf(overheadStr, "%f", &opts.OverheadGiB)
 	}
+	if maxMLStr := r.URL.Query().Get("max_model_len"); maxMLStr != "" {
+		fmt.Sscanf(maxMLStr, "%d", &opts.MaxModelLenOverride)
+	}
 
 	// Look up instance type from DB.
 	instType, err := s.repo.GetInstanceTypeByName(r.Context(), instanceName)

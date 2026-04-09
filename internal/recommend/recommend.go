@@ -76,6 +76,7 @@ type Explanation struct {
 	Feasible             bool   `json:"feasible"`
 	Reason               string `json:"reason,omitempty"`
 	SuggestedInstance    string `json:"suggested_instance,omitempty"`
+	ProductionNote       string `json:"production_note,omitempty"`
 }
 
 // ModelInfo summarizes the model metadata in the response.
@@ -286,8 +287,9 @@ func roundDownContext(tokens int) int {
 
 // RecommendOptions holds optional overrides for the recommendation algorithm.
 type RecommendOptions struct {
-	TPOverride      int     // Force specific tensor parallel degree (0 = auto)
-	OverheadGiB     float64 // Override calculated overhead (0 = auto-calculate)
+	TPOverride         int     // Force specific tensor parallel degree (0 = auto)
+	OverheadGiB        float64 // Override calculated overhead (0 = auto-calculate)
+	MaxModelLenOverride int    // Force specific max_model_len (0 = auto); concurrency adjusts to fit
 }
 
 // DefaultOverheadGiB calculates the default runtime overhead for a model based on its dimensions.
@@ -553,11 +555,22 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	}
 
 	maxTokensKV := int(remainingBytes / kvPerToken)
-	maxModelLen := cfg.MaxPositionEmbeddings
+	nativeMaxModelLen := cfg.MaxPositionEmbeddings
+	maxModelLen := nativeMaxModelLen
 	if maxTokensKV < maxModelLen {
 		maxModelLen = maxTokensKV
 	}
 	maxModelLen = roundDownContext(maxModelLen)
+
+	// If user explicitly overrides max_model_len, use that as the target.
+	// Concurrency will be calculated to fit within the KV budget.
+	userOverrideMaxModelLen := opts.MaxModelLenOverride > 0
+	if userOverrideMaxModelLen {
+		maxModelLen = roundDownContext(opts.MaxModelLenOverride)
+		if maxModelLen > maxTokensKV {
+			maxModelLen = roundDownContext(maxTokensKV)
+		}
+	}
 
 	// Scale input/output sequence lengths based on available context.
 	switch {
@@ -575,7 +588,7 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		rec.OutputSequenceLength = maxModelLen / 3
 	}
 
-	// Calculate concurrency based on average sequence length.
+	// Calculate concurrency: KV budget / (tokens per sequence × bytes per token).
 	avgSeqLen := float64(rec.InputSequenceLength + rec.OutputSequenceLength)
 	effectiveSeqLen := float64(effectiveKVCacheLength(int(avgSeqLen), cfg.SlidingWindow))
 	memPerSeq := kvPerToken * effectiveSeqLen
@@ -594,24 +607,45 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 	// of the KV cache budget. vLLM uses paged attention so not every slot is
 	// fully allocated, but we need headroom to prevent OOM under load.
 	kvBudgetTokens := int(0.9 * remainingBytes / kvPerToken)
+	benchMaxModelLen := maxModelLen // save before adjustment for production note
 	if maxModelLen*maxConcurrent > kvBudgetTokens {
-		// Prefer keeping concurrency high, reduce max_model_len first.
-		safeMaxModelLen := roundDownContext(kvBudgetTokens / maxConcurrent)
-		minModelLen := roundDownContext((rec.InputSequenceLength + rec.OutputSequenceLength) * 2)
-		if safeMaxModelLen >= minModelLen {
-			maxModelLen = safeMaxModelLen
-		} else {
-			// max_model_len would be too small; keep minimum and reduce concurrency.
-			maxModelLen = minModelLen
+		if userOverrideMaxModelLen {
+			// User chose max_model_len; adjust concurrency to fit.
 			maxConcurrent = kvBudgetTokens / maxModelLen
 			if maxConcurrent < 1 {
 				maxConcurrent = 1
 			}
+		} else {
+			// Auto mode: prefer keeping concurrency high, reduce max_model_len.
+			safeMaxModelLen := roundDownContext(kvBudgetTokens / maxConcurrent)
+			minModelLen := roundDownContext((rec.InputSequenceLength + rec.OutputSequenceLength) * 2)
+			if safeMaxModelLen >= minModelLen {
+				maxModelLen = safeMaxModelLen
+			} else {
+				maxModelLen = minModelLen
+				maxConcurrent = kvBudgetTokens / maxModelLen
+				if maxConcurrent < 1 {
+					maxConcurrent = 1
+				}
+			}
+			benchMaxModelLen = maxModelLen
 		}
 	}
 
 	rec.MaxModelLen = maxModelLen
 	rec.Concurrency = maxConcurrent
+
+	// Production note: when the benchmark config uses less than the model's
+	// full context, show what concurrency would look like at full context.
+	if !userOverrideMaxModelLen && benchMaxModelLen < nativeMaxModelLen && kvBudgetTokens > 0 {
+		fullContextConcurrency := kvBudgetTokens / nativeMaxModelLen
+		if fullContextConcurrency < 1 {
+			fullContextConcurrency = 1
+		}
+		rec.Explanation.ProductionNote = fmt.Sprintf(
+			"For full %d-token context, set max_model_len=%d and reduce concurrency to %d.",
+			nativeMaxModelLen, nativeMaxModelLen, fullContextConcurrency)
+	}
 
 	// Generate explanation for max_model_len
 	if cfg.SlidingWindow > 0 {

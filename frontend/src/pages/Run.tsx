@@ -25,6 +25,7 @@ export default function Run() {
   const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
   const [validTPOptions, setValidTPOptions] = useState<number[]>([]);
   const overheadDebounceRef = useRef<number | null>(null);
+  const maxModelLenDebounceRef = useRef<number | null>(null);
   const autoRecommendRef = useRef<number | null>(null);
   const memoryBreakdownRef = useRef<number | null>(null);
   // PRD-15: Memory breakdown and OOM state
@@ -288,6 +289,39 @@ export default function Run() {
         }));
       } catch (err) {
         console.error("Overhead recalculation failed:", err);
+      }
+    }, 300);
+  }
+
+  // Recalculate concurrency when max_model_len is changed by user (debounced)
+  function handleMaxModelLenChange(newMaxModelLen: number) {
+    set("max_model_len", newMaxModelLen);
+
+    if (!recommendation || !recommendation.explanation.feasible) {
+      return;
+    }
+
+    if (maxModelLenDebounceRef.current) {
+      clearTimeout(maxModelLenDebounceRef.current);
+    }
+
+    maxModelLenDebounceRef.current = window.setTimeout(async () => {
+      try {
+        const rec = await getRecommendation(
+          form.model_hf_id,
+          form.instance_type_name,
+          form.hf_token || undefined,
+          form.tensor_parallel_degree,
+          form.overhead_gib || undefined,
+          newMaxModelLen > 0 ? newMaxModelLen : undefined
+        );
+        setRecommendation(rec);
+        setForm((prev) => ({
+          ...prev,
+          concurrency: rec.explanation.feasible ? rec.concurrency : prev.concurrency,
+        }));
+      } catch (err) {
+        console.error("Max model len recalculation failed:", err);
       }
     }, 300);
   }
@@ -601,6 +635,14 @@ export default function Run() {
           <RecommendationCards recommendation={recommendation} />
         )}
 
+        {/* Production note when max_model_len was reduced for benchmarking */}
+        {recommendation?.explanation?.feasible && recommendation.explanation.production_note && (
+          <div className="rounded-md border border-blue-200 bg-blue-50 p-4 text-sm">
+            <p className="font-medium text-blue-800 mb-1">Production deployment note</p>
+            <p className="text-blue-700">{recommendation.explanation.production_note}</p>
+          </div>
+        )}
+
         {/* Infeasibility warning with alternatives */}
         {recommendation?.explanation && !recommendation.explanation.feasible && (
           <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm">
@@ -716,7 +758,7 @@ export default function Run() {
               type="number"
               min={0}
               value={form.max_model_len}
-              onChange={(e) => set("max_model_len", Number(e.target.value))}
+              onChange={(e) => handleMaxModelLenChange(Number(e.target.value))}
               placeholder="0 = auto"
               className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
             />

@@ -149,6 +149,7 @@ export interface RecommendExplanation {
   feasible: boolean;
   reason?: string;
   suggested_instance?: string;
+  production_note?: string;
 }
 
 export interface RecommendModelInfo {

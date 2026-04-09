@@ -104,11 +104,13 @@ export async function getRecommendation(
   instanceType: string,
   hfToken?: string,
   tp?: number,
-  overheadGiB?: number
+  overheadGiB?: number,
+  maxModelLen?: number
 ): Promise<RecommendResponse> {
   const params = new URLSearchParams({ model, instance_type: instanceType });
   if (tp !== undefined && tp > 0) params.set("tp", String(tp));
   if (overheadGiB !== undefined && overheadGiB > 0) params.set("overhead_gib", String(overheadGiB));
+  if (maxModelLen !== undefined && maxModelLen > 0) params.set("max_model_len", String(maxModelLen));
   const headers: Record<string, string> = {};
   if (hfToken) headers["X-HF-Token"] = hfToken;
   return fetchJSON<RecommendResponse>(`${BASE}/recommend?${params}`, { headers });
