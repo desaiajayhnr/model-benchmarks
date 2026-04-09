@@ -281,9 +281,9 @@ func TestRecommendAlternatives_ShowsFP8Option(t *testing.T) {
 	}
 }
 
-func TestRecommendWithPreQuantized(t *testing.T) {
+func TestRecommendWithBitsandbytes(t *testing.T) {
 	// Model that doesn't fit at native precision on non-FP8 hardware.
-	// Should be feasible with INT8 but require a pre-quantized model.
+	// Should be feasible with INT8 via bitsandbytes (on-the-fly quantization).
 	model := ModelConfig{
 		ParameterCount:        70_000_000_000,
 		HiddenSize:            8192,
@@ -311,12 +311,12 @@ func TestRecommendWithPreQuantized(t *testing.T) {
 	if rec.Alternatives == nil || rec.Alternatives.QuantizationOption == nil {
 		t.Fatal("expected alternatives with quantization option")
 	}
-	if !rec.Alternatives.QuantizationOption.RequiresPreQuantized {
-		t.Error("expected RequiresPreQuantized=true for INT8 on A10G")
+	if rec.Alternatives.QuantizationOption.RequiresPreQuantized {
+		t.Error("expected RequiresPreQuantized=false for bitsandbytes INT8")
 	}
-	// Explanation should mention pre-quantized model requirement
-	if !strings.Contains(rec.Explanation.Quantization, "pre-quantized") {
-		t.Errorf("expected explanation to mention pre-quantized, got: %s", rec.Explanation.Quantization)
+	// Explanation should mention bitsandbytes
+	if !strings.Contains(rec.Explanation.Quantization, "bitsandbytes") {
+		t.Errorf("expected explanation to mention bitsandbytes, got: %s", rec.Explanation.Quantization)
 	}
 }
 

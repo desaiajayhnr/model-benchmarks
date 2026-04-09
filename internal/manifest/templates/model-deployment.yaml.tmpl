@@ -71,7 +71,9 @@ spec:
             - "bitsandbytes"
 {{- else if eq .Quantization "int4" }}
             - "--quantization"
-            - "gptq"
+            - "bitsandbytes"
+            - "--load-format"
+            - "bitsandbytes"
 {{- end }}
 {{- if gt .MaxModelLen 0 }}
             - "--max-model-len"

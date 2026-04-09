@@ -438,10 +438,9 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 		rec.Alternatives = &Alternatives{}
 
 		// Try quantization levels in order of preference.
-		// FP8: Runtime only - requires hardware support (H100/H200/L40S), skip if not available
-		// INT8/INT4: Require pre-quantized models (GPTQ/AWQ) but work on any hardware
+		// FP8: Runtime quantization - requires hardware support (H100/H200/L40S)
+		// INT8/INT4: On-the-fly quantization via bitsandbytes - works on any hardware
 		var fitsWithQuant bool
-		var requiresPreQuantized bool
 
 		// First try FP8 if hardware supports it
 		if supportsFP8(inst.AcceleratorName) {
@@ -449,7 +448,6 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			if fp8Mem <= totalUsableBytes {
 				chosenQuant = "fp8"
 				fitsWithQuant = true
-				requiresPreQuantized = false
 				rec.Alternatives.QuantizationOption = &QuantizationOption{
 					Quantization:         "fp8",
 					EstimatedMemGiB:      fp8Mem / gibBytes,
@@ -458,18 +456,17 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			}
 		}
 
-		// If FP8 didn't work, try INT8/INT4 (require pre-quantized models)
+		// If FP8 didn't work, try INT8/INT4 via bitsandbytes (on-the-fly quantization)
 		if !fitsWithQuant {
 			for _, qName := range []string{"int8", "int4"} {
 				qMem := modelMemoryBytes(cfg.ParameterCount, qName)
 				if qMem <= totalUsableBytes {
 					chosenQuant = qName
 					fitsWithQuant = true
-					requiresPreQuantized = true
 					rec.Alternatives.QuantizationOption = &QuantizationOption{
 						Quantization:         qName,
 						EstimatedMemGiB:      qMem / gibBytes,
-						RequiresPreQuantized: true,
+						RequiresPreQuantized: false,
 					}
 					break
 				}
@@ -500,13 +497,8 @@ func Recommend(cfg ModelConfig, inst InstanceSpec, allInstances []InstanceSpec, 
 			}
 			tp := validTPDegree(minGPUsQ, cfg.NumAttentionHeads, cfg.NumKeyValueHeads, inst.AcceleratorCount)
 			rec.TensorParallelDegree = tp
-			if requiresPreQuantized {
-				rec.Explanation.Quantization = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available. %s quantization (%.1f GiB) requires a pre-quantized model (GPTQ/AWQ).",
-					modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, strings.ToUpper(chosenQuant), qMem/gibBytes)
-			} else {
-				rec.Explanation.Quantization = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available. Using %s quantization (%.1f GiB).",
-					modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, chosenQuant, qMem/gibBytes)
-			}
+			rec.Explanation.Quantization = fmt.Sprintf("Model requires %.1f GiB in %s but only %.0f GiB available. Using %s quantization via bitsandbytes (%.1f GiB).",
+				modelMemNative/gibBytes, dtype, totalUsableBytes/gibBytes, strings.ToUpper(chosenQuant), qMem/gibBytes)
 			rec.Explanation.TensorParallelDegree = fmt.Sprintf("TP=%d with %s quantization: %.1f GiB model across %d × %s.",
 				tp, chosenQuant, qMem/gibBytes, inst.AcceleratorCount, inst.AcceleratorName)
 		} else {
