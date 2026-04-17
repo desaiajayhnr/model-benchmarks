@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Name }}
+  namespace: {{ .Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ .Name }}
+    app.kubernetes.io/component: cache-job
+    accelbench/role: cache-job
+    accelbench/cache-id: "{{ .CacheID }}"
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Name }}
+        app.kubernetes.io/component: cache-job
+        accelbench/role: cache-job
+    spec:
+      serviceAccountName: accelbench-cache-job
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: accelbench/node-type
+                    operator: In
+                    values:
+                      - system
+      containers:
+        - name: cache
+          image: {{ .CacheImage }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "Downloading {{ .ModelHfID }} revision {{ .HfRevision }}..."
+              hf download {{ .ModelHfID }} --revision {{ .HfRevision }} --local-dir /models/{{ .ModelPath }}
+              echo "Uploading to s3://{{ .S3Bucket }}/models/{{ .ModelPath }}..."
+              aws s3 sync /models/{{ .ModelPath }} s3://{{ .S3Bucket }}/models/{{ .ModelPath }} --no-progress
+              SIZE=$(du -sb /models/{{ .ModelPath }} | cut -f1)
+              echo "CACHE_COMPLETE size_bytes=${SIZE}"
+          env:
+{{- if .HfToken }}
+            - name: HF_TOKEN
+              value: "{{ .HfToken }}"
+{{- end }}
+            - name: AWS_REGION
+              value: "{{ .AWSRegion }}"
+          resources:
+            requests:
+              cpu: "2"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+      volumes:
+        - name: model-storage
+          emptyDir:
+            sizeLimit: 500Gi

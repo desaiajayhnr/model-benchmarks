@@ -60,6 +60,25 @@ type LoadgenJobParams struct {
 	HfToken            string // HuggingFace token for downloading datasets (sharegpt, cnn_dailymail)
 }
 
+// CacheJobParams holds values for rendering the model cache Job.
+type CacheJobParams struct {
+	Name       string
+	Namespace  string
+	CacheID    string
+	CacheImage string
+	ModelHfID  string
+	HfRevision string
+	ModelPath  string // org/model-name (derived from HfID)
+	S3Bucket   string
+	HfToken    string
+	AWSRegion  string
+}
+
+// RenderCacheJob renders the model cache Job manifest.
+func RenderCacheJob(params CacheJobParams) (string, error) {
+	return renderTemplate("cache-job.yaml.tmpl", params)
+}
+
 // RenderModelDeployment renders the model Deployment + Service manifests.
 func RenderModelDeployment(params ModelDeploymentParams) (string, error) {
 	return renderTemplate("model-deployment.yaml.tmpl", params)

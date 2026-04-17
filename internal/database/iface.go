@@ -33,6 +33,8 @@ type Repo interface {
 	OOMRepo
 	// Test suite operations
 	TestSuiteRepo
+	// Model cache operations
+	ModelCacheRepo
 }
 
 // OOMRepo defines the interface for OOM event operations.
@@ -79,6 +81,17 @@ type TestSuiteRepo interface {
 	ListTestSuiteRuns(ctx context.Context, modelID, instanceTypeID string) ([]TestSuiteRun, error)
 	ListSuiteRunsWithNames(ctx context.Context) ([]SuiteRunListItem, error)
 	DeleteSuiteRun(ctx context.Context, id string) error
+}
+
+// ModelCacheRepo defines the interface for model cache operations.
+type ModelCacheRepo interface {
+	CreateModelCache(ctx context.Context, m *ModelCache) (string, error)
+	GetModelCache(ctx context.Context, id string) (*ModelCache, error)
+	GetModelCacheByHfID(ctx context.Context, hfID, revision string) (*ModelCache, error)
+	ListModelCache(ctx context.Context) ([]ModelCache, error)
+	UpdateModelCacheStatus(ctx context.Context, id, status string, errMsg *string) error
+	UpdateModelCacheComplete(ctx context.Context, id string, sizeBytes int64) error
+	DeleteModelCache(ctx context.Context, id string) error
 }
 
 // Compile-time check that *Repository implements Repo.

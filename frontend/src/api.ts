@@ -18,6 +18,9 @@ import type {
   TestSuite,
   SuiteRunRequest,
   TestSuiteRun,
+  ModelCache,
+  CacheModelRequest,
+  RegisterCustomModelRequest,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -242,4 +245,33 @@ export interface SuiteRunListItem {
 
 export async function listSuiteRuns(): Promise<SuiteRunListItem[]> {
   return fetchJSON<SuiteRunListItem[]>(`${BASE}/suite-runs`);
+}
+
+// PRD-21: Model Cache
+export async function listModelCache(): Promise<ModelCache[]> {
+  return fetchJSON<ModelCache[]>(`${BASE}/model-cache`);
+}
+
+export async function createModelCache(req: CacheModelRequest): Promise<{ id: string; status: string }> {
+  return fetchJSON(`${BASE}/model-cache`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function getModelCache(id: string): Promise<ModelCache> {
+  return fetchJSON<ModelCache>(`${BASE}/model-cache/${id}`);
+}
+
+export async function deleteModelCache(id: string): Promise<void> {
+  await fetch(`${BASE}/model-cache/${id}`, { method: "DELETE" });
+}
+
+export async function registerCustomModel(req: RegisterCustomModelRequest): Promise<ModelCache> {
+  return fetchJSON<ModelCache>(`${BASE}/model-cache/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
 }

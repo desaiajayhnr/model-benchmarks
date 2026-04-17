@@ -430,3 +430,29 @@ export interface TestSuiteRun {
   results?: ScenarioResult[];
   scenario_definitions?: ScenarioDefinition[];
 }
+
+// PRD-21: Model Cache
+export interface ModelCache {
+  id: string;
+  hf_id?: string;
+  hf_revision: string;
+  s3_uri: string;
+  display_name: string;
+  size_bytes?: number;
+  status: "pending" | "caching" | "cached" | "failed" | "deleting";
+  error_message?: string;
+  job_name?: string;
+  cached_at?: string;
+  created_at: string;
+}
+
+export interface CacheModelRequest {
+  model_hf_id: string;
+  hf_revision?: string;
+  hf_token?: string;
+}
+
+export interface RegisterCustomModelRequest {
+  s3_uri: string;
+  display_name: string;
+}

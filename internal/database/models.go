@@ -187,3 +187,29 @@ type SuiteRunRequest struct {
 	ModelS3URI           string   `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string   `json:"hf_token,omitempty"`
 }
+
+// ModelCache tracks models cached from HuggingFace to S3, or custom S3 models.
+type ModelCache struct {
+	ID           string     `json:"id"`
+	HfID         *string    `json:"hf_id,omitempty"`
+	HfRevision   string     `json:"hf_revision"`
+	S3URI        string     `json:"s3_uri"`
+	DisplayName  string     `json:"display_name"`
+	SizeBytes    *int64     `json:"size_bytes,omitempty"`
+	Status       string     `json:"status"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	JobName      *string    `json:"job_name,omitempty"`
+	CachedAt     *time.Time `json:"cached_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
+type CacheModelRequest struct {
+	ModelHfID  string `json:"model_hf_id"`
+	HfRevision string `json:"hf_revision,omitempty"`
+	HfToken    string `json:"hf_token,omitempty"`
+}
+
+type RegisterCustomModelRequest struct {
+	S3URI       string `json:"s3_uri"`
+	DisplayName string `json:"display_name"`
+}

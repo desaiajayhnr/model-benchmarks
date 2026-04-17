@@ -67,3 +67,8 @@ output "ecr_vllm_runai_url" {
   description = "ECR repository URL for the vLLM + Run:ai Streamer image"
   value       = aws_ecr_repository.vllm_runai.repository_url
 }
+
+output "ecr_cache_job_url" {
+  description = "ECR repository URL for the cache job image"
+  value       = aws_ecr_repository.cache_job.repository_url
+}

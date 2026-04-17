@@ -6,6 +6,7 @@ const navItems = [
   { to: "/estimate", label: "Estimate" },
   { to: "/run", label: "Run Benchmark" },
   { to: "/jobs", label: "Jobs" },
+  { to: "/model-cache", label: "Model Cache" },
 ];
 
 export default function Layout() {

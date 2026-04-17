@@ -27,6 +27,9 @@ image:
   vllmRunai:
     repository: ""  # Optional: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-vllm-runai
     tag: "v0.8.5"
+  cacheJob:
+    repository: ""  # Optional: <account-id>.dkr.ecr.<region>.amazonaws.com/accelbench-cache-job
+    tag: "latest"
 
 imagePullSecrets: []
 

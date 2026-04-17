@@ -232,6 +232,19 @@ func (o *Orchestrator) deployModel(ctx context.Context, ns, name string, cfg Run
 		log.Printf("[%s] using S3 model: %s", cfg.RunID[:8], modelS3URI)
 	}
 
+	if modelS3URI == "" && cfg.Request.ModelHfID != "" {
+		revision := cfg.Request.ModelHfRevision
+		if revision == "" {
+			revision = "main"
+		}
+		cached, _ := o.repo.GetModelCacheByHfID(ctx, cfg.Request.ModelHfID, revision)
+		if cached != nil && cached.Status == "cached" {
+			modelS3URI = cached.S3URI
+			useRunai = true
+			log.Printf("[%s] auto-detected cached model: %s", cfg.RunID[:8], modelS3URI)
+		}
+	}
+
 	var modelServiceAccount string
 	if useRunai {
 		modelServiceAccount = "accelbench-model"

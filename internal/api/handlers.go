@@ -89,6 +89,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/suite-runs", s.handleListSuiteRuns)
 	mux.HandleFunc("POST /api/v1/suite-runs", s.handleCreateSuiteRun)
 	mux.HandleFunc("GET /api/v1/suite-runs/{id}", s.handleGetSuiteRun)
+	// PRD-20: Model cache management
+	mux.HandleFunc("GET /api/v1/model-cache", s.handleListModelCache)
+	mux.HandleFunc("POST /api/v1/model-cache", s.handleCreateModelCache)
+	mux.HandleFunc("GET /api/v1/model-cache/{id}", s.handleGetModelCache)
+	mux.HandleFunc("DELETE /api/v1/model-cache/{id}", s.handleDeleteModelCache)
+	mux.HandleFunc("POST /api/v1/model-cache/register", s.handleRegisterCustomModel)
 }
 
 func (s *Server) handleListCatalog(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ import Run from "./pages/Run";
 import ResultDetail from "./pages/ResultDetail";
 import SuiteResults from "./pages/SuiteResults";
 import Jobs from "./pages/Jobs";
+import ModelCachePage from "./pages/ModelCache";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/results/:id" element={<ResultDetail />} />
           <Route path="/suite-runs/:id" element={<SuiteResults />} />
           <Route path="/jobs" element={<Jobs />} />
+          <Route path="/model-cache" element={<ModelCachePage />} />
         </Route>
       </Routes>
     </BrowserRouter>

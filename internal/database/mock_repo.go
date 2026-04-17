@@ -19,6 +19,7 @@ type MockRepo struct {
 	oomEvents       []OOMEvent                   // OOM events
 	suiteRuns       map[string]*TestSuiteRun     // keyed by suite run ID
 	scenarioResults map[string]*ScenarioResult   // keyed by scenario result ID
+	modelCache      map[string]*ModelCache       // keyed by cache ID
 	nextID          int
 }
 
@@ -32,6 +33,7 @@ func NewMockRepo() *MockRepo {
 		pricing:         make(map[string]*Pricing),
 		suiteRuns:       make(map[string]*TestSuiteRun),
 		scenarioResults: make(map[string]*ScenarioResult),
+		modelCache:      make(map[string]*ModelCache),
 	}
 }
 
@@ -677,5 +679,78 @@ func (m *MockRepo) DeleteSuiteRun(_ context.Context, id string) error {
 			delete(m.scenarioResults, k)
 		}
 	}
+	return nil
+}
+
+// Model Cache methods
+
+func (m *MockRepo) CreateModelCache(_ context.Context, mc *ModelCache) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	id := fmt.Sprintf("cache-%08d", m.nextID)
+	mc.ID = id
+	mc.CreatedAt = time.Now()
+	m.modelCache[id] = mc
+	return id, nil
+}
+
+func (m *MockRepo) GetModelCache(_ context.Context, id string) (*ModelCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.modelCache[id], nil
+}
+
+func (m *MockRepo) GetModelCacheByHfID(_ context.Context, hfID, revision string) (*ModelCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, mc := range m.modelCache {
+		if mc.HfID != nil && *mc.HfID == hfID && mc.HfRevision == revision {
+			return mc, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *MockRepo) ListModelCache(_ context.Context) ([]ModelCache, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var items []ModelCache
+	for _, mc := range m.modelCache {
+		items = append(items, *mc)
+	}
+	return items, nil
+}
+
+func (m *MockRepo) UpdateModelCacheStatus(_ context.Context, id, status string, errMsg *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mc, ok := m.modelCache[id]
+	if !ok {
+		return fmt.Errorf("model cache %s not found", id)
+	}
+	mc.Status = status
+	mc.ErrorMessage = errMsg
+	return nil
+}
+
+func (m *MockRepo) UpdateModelCacheComplete(_ context.Context, id string, sizeBytes int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mc, ok := m.modelCache[id]
+	if !ok {
+		return fmt.Errorf("model cache %s not found", id)
+	}
+	mc.Status = "cached"
+	mc.SizeBytes = &sizeBytes
+	now := time.Now()
+	mc.CachedAt = &now
+	return nil
+}
+
+func (m *MockRepo) DeleteModelCache(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.modelCache, id)
 	return nil
 }

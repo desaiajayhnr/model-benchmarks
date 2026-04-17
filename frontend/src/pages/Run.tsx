@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { createRun, createSuiteRun, getRecommendation, listInstanceTypes, listScenarios, listTestSuites, getMemoryBreakdown, getOOMHistory } from "../api";
-import type { InstanceType, RecommendResponse, MemoryBreakdownResponse, OOMHistory, Scenario, TestSuite } from "../types";
+import { createRun, createSuiteRun, getRecommendation, listInstanceTypes, listScenarios, listTestSuites, getMemoryBreakdown, getOOMHistory, listModelCache } from "../api";
+import type { InstanceType, RecommendResponse, MemoryBreakdownResponse, OOMHistory, Scenario, TestSuite, ModelCache } from "../types";
 import { validateToken } from "../hfApi";
 import type { HfModelDetail } from "../hfApi";
 import ModelCombobox from "../components/ModelCombobox";
@@ -33,6 +33,8 @@ export default function Run() {
   const [memoryBreakdownLoading, setMemoryBreakdownLoading] = useState(false);
   const [oomHistory, setOOMHistory] = useState<OOMHistory | null>(null);
 
+  const [cachedModel, setCachedModel] = useState<ModelCache | null>(null);
+  const [useS3Cache, setUseS3Cache] = useState(true);
 
   // PRD-12/13: Scenarios and test suites
   const [runMode, setRunMode] = useState<RunMode>("single");
@@ -229,6 +231,22 @@ export default function Run() {
     setRecommendation(null);
     setMemoryBreakdown(null);
     setOOMHistory(null);
+
+    const modelId = detail.modelId;
+    listModelCache()
+      .then((cache) => {
+        const match = cache.find(
+          (c) => c.hf_id === modelId && c.status === "cached"
+        );
+        setCachedModel(match || null);
+        if (match) {
+          set("model_s3_uri", match.s3_uri);
+          setUseS3Cache(true);
+        } else {
+          set("model_s3_uri", "");
+        }
+      })
+      .catch(() => setCachedModel(null));
   }
 
   // Recalculate recommendation when TP is changed by user
@@ -436,10 +454,32 @@ export default function Run() {
           </label>
           <ModelCombobox
             value={form.model_hf_id}
-            onChange={(v) => set("model_hf_id", v)}
+            onChange={(v) => {
+              set("model_hf_id", v);
+              setCachedModel(null);
+            }}
             onModelSelect={handleModelSelect}
             hfToken={form.hf_token}
           />
+          {cachedModel && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                S3 Cached
+              </span>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={useS3Cache}
+                  onChange={(e) => {
+                    setUseS3Cache(e.target.checked);
+                    set("model_s3_uri", e.target.checked ? cachedModel.s3_uri : "");
+                  }}
+                  className="rounded border-gray-300"
+                />
+                Load from S3 (faster)
+              </label>
+            </div>
+          )}
         </div>
 
         {/* Revision */}

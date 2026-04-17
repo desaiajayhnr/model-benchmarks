@@ -322,6 +322,63 @@ resource "aws_eks_pod_identity_association" "model" {
   tags = local.tags
 }
 
+# ---------- ECR Repository for cache-job image ----------
+resource "aws_ecr_repository" "cache_job" {
+  name                 = "${var.project_name}-cache-job"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  tags                 = local.tags
+}
+
+# ---------- Cache Job Pod Identity (S3 read+write for HF-to-S3 caching) ----------
+resource "aws_iam_role" "cache_job_pod" {
+  name = "${var.project_name}-cache-job"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "pods.eks.amazonaws.com"
+      }
+      Action = ["sts:AssumeRole", "sts:TagSession"]
+    }]
+  })
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy" "cache_job_s3" {
+  name = "S3ModelsReadWrite"
+  role = aws_iam_role.cache_job_pod.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ]
+      Resource = [
+        aws_s3_bucket.models.arn,
+        "${aws_s3_bucket.models.arn}/*"
+      ]
+    }]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "cache_job" {
+  cluster_name    = module.eks.cluster_name
+  namespace       = "accelbench"
+  service_account = "accelbench-cache-job"
+  role_arn        = aws_iam_role.cache_job_pod.arn
+
+  tags = local.tags
+}
+
 # Add S3 read access on models bucket to API pod role
 resource "aws_iam_role_policy" "api_models_s3_read" {
   name = "S3ModelsRead"
