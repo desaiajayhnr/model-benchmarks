@@ -74,6 +74,7 @@ export default function Run() {
       min_duration_seconds: 180,
       hf_token: searchParams.get("hf_token") || "",
       overhead_gib: 0, // 0 = auto-calculated
+      api_type: "",
       model_s3_uri: searchParams.get("model_s3_uri") || "",
     };
   });
@@ -569,6 +570,19 @@ export default function Run() {
               className="w-full rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
             />
           </div>
+        </div>
+
+        {/* API Type */}
+        <div>
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={(form as Record<string, unknown>).api_type === "completion"}
+              onChange={(e) => set("api_type", e.target.checked ? "completion" : "")}
+              className="rounded border-gray-300"
+            />
+            Base model <span className="text-gray-400 font-normal">(use /v1/completions instead of /v1/chat/completions)</span>
+          </label>
         </div>
 
         {/* PRD-12/13: Run Mode and Scenario/Suite Selection */}

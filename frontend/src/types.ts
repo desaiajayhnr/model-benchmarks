@@ -109,6 +109,7 @@ export interface RunRequest {
   run_type?: string;
   scenario_id?: string;
   max_model_len?: number;
+  api_type?: string;
   model_s3_uri?: string;
   min_duration_seconds?: number;
   hf_token?: string;

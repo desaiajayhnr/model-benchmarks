@@ -8,6 +8,7 @@ type InferencePerfConfigParams struct {
 	TargetPort int
 
 	// API settings
+	APIType   string // "chat_completion" (default) or "completion"
 	Streaming bool
 
 	// Data distribution settings

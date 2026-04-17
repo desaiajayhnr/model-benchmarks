@@ -8,7 +8,7 @@ tokenizer:
   pretrained_model_name_or_path: {{ .ModelHfID }}
 
 api:
-  type: completion
+  type: {{ if .APIType }}{{ .APIType }}{{ else }}chat_completion{{ end }}
   streaming: {{ .Streaming }}
 
 data:

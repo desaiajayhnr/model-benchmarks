@@ -403,6 +403,10 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		}
 	}
 
+	if cfg.Request.APIType != "" {
+		inferencePerfConfig.APIType = cfg.Request.APIType
+	}
+
 	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)
 	if err != nil {
 		return fmt.Errorf("render inference-perf config: %w", err)

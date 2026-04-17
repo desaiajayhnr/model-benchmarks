@@ -124,6 +124,7 @@ type RunRequest struct {
 	MaxModelLen          int     `json:"max_model_len,omitempty"`
 	MinDurationSeconds   int     `json:"min_duration_seconds,omitempty"`
 	ScenarioID           string  `json:"scenario_id,omitempty"` // scenario identifier (chatbot, batch, etc.)
+	APIType              string  `json:"api_type,omitempty"`    // "chat_completion" (default) or "completion"
 	ModelS3URI           string  `json:"model_s3_uri,omitempty"` // s3://bucket/path — load from S3 via Run:ai streamer
 	HfToken              string  `json:"hf_token,omitempty"`
 }

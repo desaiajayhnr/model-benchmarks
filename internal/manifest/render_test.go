@@ -242,7 +242,7 @@ func TestRenderInferencePerfConfig(t *testing.T) {
 		{"base url", "base_url: http://bench-test123:8000"},
 		{"ignore_eos", "ignore_eos: true"},
 		{"tokenizer", "pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct"},
-		{"api type", "type: completion"},
+		{"api type", "type: chat_completion"},
 		{"streaming", "streaming: true"},
 		{"data type", "type: synthetic"},
 		{"input mean", "mean: 256"},
