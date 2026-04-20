@@ -572,19 +572,6 @@ export default function Run() {
           </div>
         </div>
 
-        {/* API Type */}
-        <div>
-          <label className="flex items-center gap-2 text-sm text-gray-700">
-            <input
-              type="checkbox"
-              checked={(form as Record<string, unknown>).api_type === "completion"}
-              onChange={(e) => set("api_type", e.target.checked ? "completion" : "")}
-              className="rounded border-gray-300"
-            />
-            Base model <span className="text-gray-400 font-normal">(use /v1/completions instead of /v1/chat/completions)</span>
-          </label>
-        </div>
-
         {/* PRD-12/13: Run Mode and Scenario/Suite Selection */}
         {scenarios.length > 0 && testSuites.length > 0 && (
           <div className="border rounded-lg p-4 bg-gray-50">

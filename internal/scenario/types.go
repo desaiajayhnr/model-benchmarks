@@ -60,10 +60,13 @@ func (s *Scenario) ToInferencePerfConfig(modelHfID, targetHost string, targetPor
 		}
 	}
 
+	apiType := inferAPIType(s.Dataset)
+
 	return manifest.InferencePerfConfigParams{
 		ModelHfID:    modelHfID,
 		TargetHost:   targetHost,
 		TargetPort:   targetPort,
+		APIType:     apiType,
 		Streaming:    s.Streaming,
 		DatasetType:  s.Dataset,
 		InputMean:    s.Input.Mean,
@@ -77,5 +80,17 @@ func (s *Scenario) ToInferencePerfConfig(modelHfID, targetHost string, targetPor
 		LoadType:     s.LoadType,
 		Stages:       stages,
 		NumWorkers:   s.NumWorkers,
+	}
+}
+
+// inferAPIType returns the appropriate API type based on dataset.
+// Synthetic/random data has no chat structure, so use completion.
+// Real datasets (sharegpt, etc.) have conversation format, so use chat.
+func inferAPIType(dataset string) string {
+	switch dataset {
+	case "synthetic", "random":
+		return "completion"
+	default:
+		return "chat"
 	}
 }

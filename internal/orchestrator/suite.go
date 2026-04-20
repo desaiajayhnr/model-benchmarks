@@ -220,6 +220,19 @@ func (o *Orchestrator) runScenario(ctx context.Context, ns, modelSvc, suiteRunID
 	// Generate inference-perf config from scenario
 	inferencePerfConfig := s.ToInferencePerfConfig(cfg.Request.ModelHfID, modelSvc, 8000)
 
+	// When loading from S3, vLLM registers the model with the S3 URI as its name
+	if cfg.Request.ModelS3URI != "" {
+		inferencePerfConfig.ModelName = cfg.Request.ModelS3URI
+	} else if cfg.Request.ModelHfID != "" {
+		revision := cfg.Request.ModelHfRevision
+		if revision == "" {
+			revision = "main"
+		}
+		if cached, _ := o.repo.GetModelCacheByHfID(ctx, cfg.Request.ModelHfID, revision); cached != nil && cached.Status == "cached" {
+			inferencePerfConfig.ModelName = cached.S3URI
+		}
+	}
+
 	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)
 	if err != nil {
 		return nil, "", fmt.Errorf("render config: %w", err)

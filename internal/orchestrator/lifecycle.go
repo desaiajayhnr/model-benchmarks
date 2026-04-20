@@ -403,8 +403,30 @@ func (o *Orchestrator) launchLoadgen(ctx context.Context, ns, name, modelSvc str
 		}
 	}
 
+	// Set API type: explicit override from request > infer from final dataset
+	// (Re-inferring here ensures dataset overrides on scenarios also update the API type)
 	if cfg.Request.APIType != "" {
 		inferencePerfConfig.APIType = cfg.Request.APIType
+	} else {
+		switch inferencePerfConfig.DatasetType {
+		case "synthetic", "random":
+			inferencePerfConfig.APIType = "completion"
+		default:
+			inferencePerfConfig.APIType = "chat"
+		}
+	}
+
+	// When loading from S3, vLLM registers the model with the S3 URI as its name
+	if cfg.Request.ModelS3URI != "" {
+		inferencePerfConfig.ModelName = cfg.Request.ModelS3URI
+	} else if cfg.Request.ModelHfID != "" {
+		revision := cfg.Request.ModelHfRevision
+		if revision == "" {
+			revision = "main"
+		}
+		if cached, _ := o.repo.GetModelCacheByHfID(ctx, cfg.Request.ModelHfID, revision); cached != nil && cached.Status == "cached" {
+			inferencePerfConfig.ModelName = cached.S3URI
+		}
 	}
 
 	configYAML, err := manifest.RenderInferencePerfConfig(inferencePerfConfig)

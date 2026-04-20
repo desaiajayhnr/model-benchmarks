@@ -3,7 +3,8 @@ package manifest
 // InferencePerfConfigParams holds values for rendering the inference-perf config YAML.
 type InferencePerfConfigParams struct {
 	// Server settings
-	ModelHfID  string
+	ModelHfID  string // HuggingFace ID (also used for tokenizer)
+	ModelName  string // Model name for API requests (S3 URI when loading from S3; empty = use ModelHfID)
 	TargetHost string
 	TargetPort int
 

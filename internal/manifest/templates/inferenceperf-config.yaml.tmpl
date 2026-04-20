@@ -1,6 +1,6 @@
 server:
   type: vllm
-  model_name: {{ .ModelHfID }}
+  model_name: {{ if .ModelName }}{{ .ModelName }}{{ else }}{{ .ModelHfID }}{{ end }}
   base_url: http://{{ .TargetHost }}:{{ .TargetPort }}
   ignore_eos: true
 
@@ -8,7 +8,7 @@ tokenizer:
   pretrained_model_name_or_path: {{ .ModelHfID }}
 
 api:
-  type: {{ if .APIType }}{{ .APIType }}{{ else }}chat_completion{{ end }}
+  type: {{ .APIType }}
   streaming: {{ .Streaming }}
 
 data:
