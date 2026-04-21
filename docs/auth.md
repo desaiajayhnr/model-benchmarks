@@ -56,6 +56,10 @@ Clusters created fresh from this repo's Terraform already have this enabled.
    acm_certificate_arn   = "<ACM_CERTIFICATE_ARN>"
    cognito_domain_prefix = "accelbench-auth"
    mfa_configuration     = "OFF"   # or OPTIONAL / ON
+
+   # Optional — enable self-signup for specific email domains only.
+   # Empty (default) = admins create users via CLI; signup link is hidden.
+   # allowed_email_domains = ["amazon.com"]
    ```
 
 2. **Apply Terraform**:
@@ -116,6 +120,33 @@ Clusters created fresh from this repo's Terraform already have this enabled.
   Interval is 30s + event-triggered for fast propagation.
 - **Cognito callback URL** is computed from `var.domain_name` at apply time, so
   changing the domain only requires `terraform apply` — no second step.
+
+## Self-signup (optional)
+
+By default the user pool is admin-provisioned only — users are created via the
+AWS CLI and the Cognito Hosted UI hides the "Sign up" link.
+
+To allow users to sign themselves up while still gatekeeping by email domain,
+set `allowed_email_domains` in `terraform.tfvars`:
+
+```hcl
+allowed_email_domains = ["amazon.com"]       # one domain
+# or
+allowed_email_domains = ["amazon.com", "aws.dev"]   # multiple
+```
+
+What this does:
+
+1. A pre-signup Lambda trigger is deployed (`<project>-cognito-pre-signup`)
+2. The Cognito Hosted UI shows the "Sign up" link
+3. When someone submits the signup form, Cognito invokes the Lambda
+4. The Lambda rejects the signup unless the email ends in one of the allowed
+   domains ("Sign-up is restricted to: amazon.com" error shown to the user)
+5. Matching signups are auto-confirmed and auto-verified — the user can log
+   in immediately without clicking a confirmation email
+
+To close signup back up, set `allowed_email_domains = []` (or remove the line)
+and re-apply. Existing users keep their access; only new signups are blocked.
 
 ## Managing users
 
@@ -215,4 +246,3 @@ the `AWSELBAuthSessionCookie-*` cookie returned after login.
   today. A follow-up PR can add `X-Amzn-Oidc-Data` validation middleware so
   the API is safe behind direct access too.
 - Role-based access control. Every authenticated user has the same access.
-- Self-signup. Users are admin-created only.
