@@ -91,3 +91,9 @@ variable "session_timeout_seconds" {
   type        = number
   default     = 28800
 }
+
+variable "allowed_email_domains" {
+  description = "Email domains permitted to self-sign up via the Cognito Hosted UI (e.g. [\"amazon.com\"]). Empty list (default) keeps the pool admin-provisioned only — self-signup is disabled."
+  type        = list(string)
+  default     = []
+}
