@@ -1,35 +1,56 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from "recharts";
-import { getRun, getMetrics, getExportManifestUrl, getExportReportUrl, listInstanceTypes } from "../api";
-import type { BenchmarkRun, BenchmarkMetrics, InstanceType } from "../types";
+  getRun,
+  getMetrics,
+  getExportManifestUrl,
+  getExportReportUrl,
+  listInstanceTypes,
+  listPricing,
+} from "../api";
+import type {
+  BenchmarkRun,
+  BenchmarkMetrics,
+  InstanceType,
+  PricingRow,
+  PricingTier,
+} from "../types";
 import MetricCard from "../components/MetricCard";
+import LatencyDistribution from "../components/LatencyDistribution";
+import HeroBlock from "../components/HeroBlock";
+import ConfigPanel from "../components/ConfigPanel";
+import PricingToggle from "../components/PricingToggle";
 import {
-  useChartTheme,
-  percentileRamp,
-  axisStyle,
-  gridProps,
-  ChartTooltip,
-  ChartLegend,
-} from "../components/ChartTheme";
-import { Legend } from "recharts";
+  hourlyRateFromMap,
+  costPerRequest,
+  costPer1MTokens,
+  totalSpent,
+  toPricingMap,
+} from "../lib/cost";
+
+function SectionHeader({
+  index,
+  label,
+}: {
+  index: string;
+  label: string;
+}) {
+  return (
+    <div className="flex items-baseline gap-3 mb-3">
+      <span className="font-mono text-[11px] tracking-widemech text-ink-2">[ {index} ]</span>
+      <h2 className="font-sans text-[15px] font-medium tracking-mech text-ink-0">{label}</h2>
+    </div>
+  );
+}
 
 export default function ResultDetail() {
   const { id } = useParams<{ id: string }>();
   const [run, setRun] = useState<BenchmarkRun | null>(null);
   const [metrics, setMetrics] = useState<BenchmarkMetrics | null>(null);
   const [instanceTypes, setInstanceTypes] = useState<InstanceType[]>([]);
+  const [pricing, setPricing] = useState<PricingRow[]>([]);
+  const [pricingTier, setPricingTier] = useState<PricingTier>("on_demand");
   const [error, setError] = useState("");
-  const chartTheme = useChartTheme();
-  const ramp = percentileRamp();
 
   useEffect(() => {
     if (!id) return;
@@ -40,11 +61,11 @@ export default function ResultDetail() {
         /* metrics may not exist yet */
       });
     listInstanceTypes().then(setInstanceTypes).catch(() => {});
+    listPricing().then(setPricing).catch(() => {});
   }, [id]);
 
   useEffect(() => {
     if (!run || run.status === "completed" || run.status === "failed") return;
-
     const interval = setInterval(() => {
       getRun(run.id).then((updated) => {
         setRun(updated);
@@ -52,61 +73,69 @@ export default function ResultDetail() {
           getMetrics(updated.id).then(setMetrics);
           clearInterval(interval);
         }
-        if (updated.status === "failed") {
-          clearInterval(interval);
-        }
+        if (updated.status === "failed") clearInterval(interval);
       });
     }, 5000);
-
     return () => clearInterval(interval);
   }, [run]);
 
+  const pricingMap = useMemo(() => toPricingMap(pricing), [pricing]);
+  const instanceType = useMemo(
+    () => instanceTypes.find((it) => it.id === run?.instance_type_id),
+    [instanceTypes, run?.instance_type_id]
+  );
+
   if (error) {
-    return <div className="p-6"><p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">{error}</p></div>;
+    return (
+      <div className="p-6">
+        <p className="font-mono text-[12px] text-danger border border-danger/40 bg-danger/5 px-3 py-2">
+          {error}
+        </p>
+      </div>
+    );
   }
-  if (!run) {
-    return <div className="p-6 caption">LOADING…</div>;
-  }
+  if (!run) return <div className="p-6 caption">LOADING…</div>;
 
-  // High latency metrics (request-level): TTFT, E2E
-  const highLatencyBars = metrics
-    ? [
-        {
-          name: "TTFT",
-          p50: metrics.ttft_p50_ms ?? 0,
-          p90: metrics.ttft_p90_ms ?? 0,
-          p95: metrics.ttft_p95_ms ?? 0,
-          p99: metrics.ttft_p99_ms ?? 0,
-        },
-        {
-          name: "E2E",
-          p50: metrics.e2e_latency_p50_ms ?? 0,
-          p90: metrics.e2e_latency_p90_ms ?? 0,
-          p95: metrics.e2e_latency_p95_ms ?? 0,
-          p99: metrics.e2e_latency_p99_ms ?? 0,
-        },
-      ]
-    : [];
+  const isNeuron = (instanceType?.accelerator_type ?? "").toLowerCase() === "neuron";
+  const acceleratorNoun = isNeuron ? "chip" : "GPU";
+  const acceleratorCount = instanceType?.accelerator_count ?? 0;
 
-  // Low latency metrics (token-level): ITL, TPOT
-  const lowLatencyBars = metrics
-    ? [
-        {
-          name: "ITL",
-          p50: metrics.itl_p50_ms ?? 0,
-          p90: metrics.itl_p90_ms ?? 0,
-          p95: metrics.itl_p95_ms ?? 0,
-          p99: metrics.itl_p99_ms ?? 0,
-        },
-        {
-          name: "TPOT",
-          p50: metrics.tpot_p50_ms ?? 0,
-          p90: metrics.tpot_p90_ms ?? 0,
-          p95: 0, // Not collected
-          p99: metrics.tpot_p99_ms ?? 0,
-        },
-      ]
-    : [];
+  const succeeded = metrics?.successful_requests ?? 0;
+  const failed = metrics?.failed_requests ?? 0;
+  const totalReqs = succeeded + failed;
+  const successRate = totalReqs > 0 ? (succeeded / totalReqs) * 100 : undefined;
+
+  const aggregateTps =
+    metrics?.throughput_aggregate_tps ?? metrics?.generation_throughput_tps;
+  const perAccelTps =
+    acceleratorCount > 0 && aggregateTps !== undefined
+      ? aggregateTps / acceleratorCount
+      : undefined;
+
+  const hourly = hourlyRateFromMap(
+    pricingMap,
+    instanceType?.name ?? "",
+    pricingTier
+  );
+  const perRequestCost = costPerRequest(hourly, metrics?.requests_per_second);
+  const per1MCost = costPer1MTokens(hourly, aggregateTps);
+  const spent = totalSpent(hourly, metrics?.total_duration_seconds);
+
+  const instanceSummary = instanceType
+    ? `${instanceType.name} · ${instanceType.accelerator_count}×${instanceType.accelerator_name} · ${instanceType.accelerator_memory_gib} GiB`
+    : "—";
+
+  const statusBadge = (
+    <span className="flex items-center gap-2 font-mono text-[11px] tracking-widemech uppercase">
+      <span className={`status-dot status-${run.status === "pending" ? "pending" : run.status}`} />
+      {run.status}
+    </span>
+  );
+
+  const runningCaption =
+    run.status === "running" || run.status === "pending"
+      ? "BENCHMARK RUNNING · RESULTS WILL APPEAR WHEN COMPLETE"
+      : null;
 
   return (
     <>
@@ -118,238 +147,241 @@ export default function ResultDetail() {
           <span className="text-ink-2">/</span>
           <span className="text-ink-0">{run.id.slice(0, 8)}</span>
         </div>
-        <span className="flex items-center font-mono text-[11px] tracking-mech uppercase">
-          <span className={`status-dot status-${run.status === "pending" ? "pending" : run.status}`} />
-          {run.status}
-        </span>
+        <PricingToggle value={pricingTier} onChange={setPricingTier} />
       </div>
+
       <div className="p-6 max-w-6xl mx-auto animate-enter">
-      <div className="mb-6 flex items-baseline gap-4">
-        <div className="eyebrow">[ RUN ]</div>
-        <div className="font-mono text-[18px] text-ink-0">{run.id.slice(0, 8)}</div>
-        <div className="caption">{run.id}</div>
-      </div>
+        <HeroBlock
+          eyebrow="[ RUN ]"
+          heading={run.model_hf_id || "(model)"}
+          subheading={instanceSummary}
+          meta={`${run.id.slice(0, 8)} · ${run.id}`}
+          statusBadge={statusBadge}
+          metrics={
+            metrics
+              ? [
+                  { label: "TTFT p99", value: metrics.ttft_p99_ms, unit: "ms", precision: 0 },
+                  { label: "Throughput", value: aggregateTps, unit: "tok/s", precision: 0 },
+                  {
+                    label: "Success Rate",
+                    value: successRate,
+                    unit: "%",
+                    precision: 1,
+                    accent: successRate !== undefined && successRate < 99 ? "warn" : "signal",
+                  },
+                  { label: "Cost / 1M tok", value: per1MCost, unit: "$", precision: 2 },
+                ]
+              : undefined
+          }
+        />
 
-      {/* Run configuration */}
-      <div className="panel p-6 mb-8">
-        <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Configuration</h2>
-        <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            ["Framework", `${run.framework} ${run.framework_version}`],
-            ["TP Degree", String(run.tensor_parallel_degree)],
-            ["Concurrency", String(run.concurrency)],
-            ["Quantization", run.quantization ?? "default"],
-            ["Input Seq", String(run.input_sequence_length)],
-            ["Output Seq", String(run.output_sequence_length)],
-            ["Dataset", run.dataset_name],
-            ["Type", run.run_type],
-          ].map(([label, value]) => (
-            <div key={label}>
-              <dt className="eyebrow">{label}</dt>
-              <dd className="font-mono text-[12.5px] text-ink-0">{value}</dd>
-            </div>
-          ))}
-        </dl>
-      </div>
+        {runningCaption && (
+          <p className="mb-6 meta text-info flex items-center gap-2">
+            <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
+            {runningCaption}
+          </p>
+        )}
 
-      {run.status === "running" && (
-        <p className="meta text-info mb-6 flex items-center gap-2">
-          <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
-          BENCHMARK IS RUNNING · RESULTS WILL APPEAR WHEN COMPLETE
-        </p>
-      )}
+        {run.status === "failed" && run.error_message && (
+          <div className="border border-danger/40 bg-danger/5 p-4 mb-6">
+            <p className="eyebrow text-danger mb-1.5">[ RUN FAILED ]</p>
+            <p className="font-mono text-[12.5px] text-danger">{run.error_message}</p>
+          </div>
+        )}
 
-      {run.status === "failed" && run.error_message && (
-        <div className="border border-danger/40 bg-danger/5 p-4 mb-6">
-          <p className="eyebrow text-danger mb-1.5">[ RUN FAILED ]</p>
-          <p className="font-mono text-[12.5px] text-danger">{run.error_message}</p>
-        </div>
-      )}
+        <ConfigPanel
+          headline={[
+            { label: "TP Degree", value: run.tensor_parallel_degree },
+            { label: "Quantization", value: run.quantization ?? "default" },
+            { label: "Concurrency", value: run.concurrency },
+            { label: "Dataset", value: run.dataset_name },
+          ]}
+          details={[
+            { label: "Framework", value: `${run.framework} ${run.framework_version}` },
+            { label: "Run Type", value: run.run_type },
+            { label: "Input Seq", value: run.input_sequence_length },
+            { label: "Output Seq", value: run.output_sequence_length },
+          ]}
+        />
 
-      {metrics && (
-        <>
-          {(() => {
-            const acceleratorCount =
-              instanceTypes.find((it) => it.id === run.instance_type_id)
-                ?.accelerator_count ?? 0;
-            const succeeded = metrics.successful_requests ?? 0;
-            const failed = metrics.failed_requests ?? 0;
-            const totalReqs = succeeded + failed;
-            const successRate =
-              totalReqs > 0 ? (succeeded / totalReqs) * 100 : undefined;
-            const throughput =
-              metrics.throughput_aggregate_tps ??
-              metrics.generation_throughput_tps;
-            const perAccelTPS =
-              acceleratorCount > 0 && throughput !== undefined
-                ? throughput / acceleratorCount
-                : undefined;
-            const acceleratorUnit =
-              (run.framework ?? "").toLowerCase().includes("neuron")
-                ? "tok/s/chip"
-                : "tok/s/GPU";
-            return (
-              <>
-                {/* Headline metric cards */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                  <MetricCard
-                    label="TTFT p50"
-                    value={metrics.ttft_p50_ms}
-                    unit="ms"
-                  />
-                  <MetricCard
-                    label="E2E Latency p50"
-                    value={metrics.e2e_latency_p50_ms}
-                    unit="ms"
-                  />
-                  <MetricCard
-                    label="ITL p50"
-                    value={metrics.itl_p50_ms}
-                    unit="ms"
-                  />
-                  <MetricCard
-                    label="Requests/sec"
-                    value={metrics.requests_per_second}
-                    unit="rps"
-                    precision={2}
-                  />
-                  <MetricCard
-                    label="GPU Busy (avg)"
-                    value={
-                      metrics.accelerator_utilization_avg_pct ??
-                      metrics.accelerator_utilization_pct
-                    }
-                    unit="%"
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="SM Active (avg)"
-                    value={metrics.sm_active_avg_pct}
-                    unit="%"
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="Tensor Active (avg)"
-                    value={metrics.tensor_active_avg_pct}
-                    unit="%"
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="DRAM Active (avg)"
-                    value={metrics.dram_active_avg_pct}
-                    unit="%"
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="Memory (avg)"
-                    value={metrics.accelerator_memory_avg_gib}
-                    unit="GiB"
-                  />
-                  <MetricCard
-                    label="Memory (peak)"
-                    value={metrics.accelerator_memory_peak_gib}
-                    unit="GiB"
-                  />
-                </div>
-
-                {/* Request stats */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-                  <MetricCard
-                    label="Successful Requests"
-                    value={succeeded}
-                    unit=""
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="Failed Requests"
-                    value={failed}
-                    unit=""
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="Success Rate"
-                    value={successRate}
-                    unit="%"
-                    precision={1}
-                  />
-                  <MetricCard
-                    label={`Throughput (per ${acceleratorUnit.includes("chip") ? "chip" : "GPU"})`}
-                    value={perAccelTPS}
-                    unit={acceleratorUnit}
-                    precision={0}
-                  />
-                  <MetricCard
-                    label="Total Duration"
-                    value={metrics.total_duration_seconds}
-                    unit="s"
-                  />
-                  <MetricCard
-                    label="Queue Max"
-                    value={metrics.waiting_requests_max}
-                    unit="req"
-                    precision={0}
-                  />
-                </div>
-              </>
-            );
-          })()}
-
-          {/* Latency Breakdown section */}
-          {(metrics.tpot_p50_ms || metrics.prefill_time_p50_ms || metrics.decode_time_p50_ms) && (
-            <div className="panel p-6 mb-8">
-              <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Latency Breakdown</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <MetricCard
-                  label="TPOT p50"
-                  value={metrics.tpot_p50_ms}
-                  unit="ms"
+        {metrics && (
+          <>
+            {/* A. LATENCY */}
+            <section className="mb-8">
+              <SectionHeader index="A" label="Latency distribution" />
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                <LatencyDistribution
+                  label="TTFT"
+                  p50={metrics.ttft_p50_ms}
+                  p90={metrics.ttft_p90_ms}
+                  p95={metrics.ttft_p95_ms}
+                  p99={metrics.ttft_p99_ms}
                 />
-                <MetricCard
-                  label="TPOT p99"
-                  value={metrics.tpot_p99_ms}
-                  unit="ms"
+                <LatencyDistribution
+                  label="E2E"
+                  p50={metrics.e2e_latency_p50_ms}
+                  p90={metrics.e2e_latency_p90_ms}
+                  p95={metrics.e2e_latency_p95_ms}
+                  p99={metrics.e2e_latency_p99_ms}
                 />
-                <MetricCard
-                  label="Prefill p50"
-                  value={metrics.prefill_time_p50_ms}
-                  unit="ms"
+                <LatencyDistribution
+                  label="ITL"
+                  p50={metrics.itl_p50_ms}
+                  p90={metrics.itl_p90_ms}
+                  p95={metrics.itl_p95_ms}
+                  p99={metrics.itl_p99_ms}
                 />
-                <MetricCard
-                  label="Decode p50"
-                  value={metrics.decode_time_p50_ms}
-                  unit="ms"
-                />
-                <MetricCard
-                  label="Queue p50"
-                  value={metrics.queue_time_p50_ms}
-                  unit="ms"
+                <LatencyDistribution
+                  label="TPOT"
+                  p50={metrics.tpot_p50_ms}
+                  p90={metrics.tpot_p90_ms}
+                  p99={metrics.tpot_p99_ms}
                 />
               </div>
-            </div>
-          )}
+            </section>
 
-          {/* Cache & Memory section */}
-          {(metrics.kv_cache_utilization_avg_pct || metrics.prefix_cache_hit_rate !== undefined || metrics.preemption_count !== undefined) && (
-            <div className="panel p-6 mb-8">
-              <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Cache & Memory</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* B. THROUGHPUT */}
+            <section className="mb-8">
+              <SectionHeader index="B" label="Throughput" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Aggregate" value={aggregateTps} unit="tok/s" precision={0} />
                 <MetricCard
-                  label="KV Cache Avg"
+                  label={`Per ${acceleratorNoun}`}
+                  value={perAccelTps}
+                  unit={`tok/s/${acceleratorNoun}`}
+                  precision={0}
+                />
+                <MetricCard
+                  label="Requests/sec"
+                  value={metrics.requests_per_second}
+                  unit="rps"
+                  precision={2}
+                />
+                <MetricCard
+                  label="Success Rate"
+                  value={successRate}
+                  unit="%"
+                  precision={1}
+                />
+                <MetricCard
+                  label="Prompt"
+                  value={metrics.prompt_throughput_tps}
+                  unit="tok/s"
+                  precision={0}
+                />
+                <MetricCard
+                  label="Generation"
+                  value={metrics.generation_throughput_tps}
+                  unit="tok/s"
+                  precision={0}
+                />
+                <MetricCard
+                  label="Avg Output"
+                  value={metrics.output_length_mean}
+                  unit="tokens"
+                  precision={0}
+                />
+                <MetricCard
+                  label="Duration"
+                  value={metrics.total_duration_seconds}
+                  unit="s"
+                  precision={0}
+                />
+              </div>
+            </section>
+
+            {/* C. HARDWARE UTILIZATION */}
+            <section className="mb-8">
+              <SectionHeader index="C" label="Hardware utilization" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard
+                  label={`${acceleratorNoun} Busy (avg)`}
+                  value={
+                    metrics.accelerator_utilization_avg_pct ??
+                    metrics.accelerator_utilization_pct
+                  }
+                  unit="%"
+                  precision={0}
+                />
+                <MetricCard
+                  label="SM Active (avg)"
+                  value={metrics.sm_active_avg_pct}
+                  unit="%"
+                  precision={0}
+                />
+                <MetricCard
+                  label="Tensor Active (avg)"
+                  value={metrics.tensor_active_avg_pct}
+                  unit="%"
+                  precision={0}
+                />
+                <MetricCard
+                  label="DRAM Active (avg)"
+                  value={metrics.dram_active_avg_pct}
+                  unit="%"
+                  precision={0}
+                />
+              </div>
+            </section>
+
+            {/* D. MEMORY */}
+            <section className="mb-8">
+              <SectionHeader index="D" label="Memory" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard
+                  label="Memory (avg)"
+                  value={metrics.accelerator_memory_avg_gib}
+                  unit="GiB"
+                />
+                <MetricCard
+                  label="Memory (peak)"
+                  value={metrics.accelerator_memory_peak_gib}
+                  unit="GiB"
+                />
+                <MetricCard
+                  label="KV Cache (avg)"
                   value={metrics.kv_cache_utilization_avg_pct}
                   unit="%"
                   precision={1}
                 />
                 <MetricCard
-                  label="KV Cache Peak"
+                  label="KV Cache (peak)"
                   value={metrics.kv_cache_utilization_peak_pct}
                   unit="%"
                   precision={1}
                 />
                 <MetricCard
-                  label="Prefix Cache Hit"
+                  label="Prefix Hit"
                   value={metrics.prefix_cache_hit_rate}
                   unit="%"
                   precision={1}
+                />
+              </div>
+            </section>
+
+            {/* E. REQUEST FLOW */}
+            <section className="mb-8">
+              <SectionHeader index="E" label="Request flow" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Successful" value={succeeded} unit="" precision={0} />
+                <MetricCard label="Failed" value={failed} unit="" precision={0} />
+                <MetricCard
+                  label="Queue Max"
+                  value={metrics.waiting_requests_max}
+                  unit="req"
+                  precision={0}
+                />
+                <MetricCard
+                  label="Running (avg)"
+                  value={metrics.running_requests_avg}
+                  unit="req"
+                  precision={1}
+                />
+                <MetricCard
+                  label="Running (max)"
+                  value={metrics.running_requests_max}
+                  unit="req"
+                  precision={0}
                 />
                 <MetricCard
                   label="Preemptions"
@@ -358,114 +390,66 @@ export default function ResultDetail() {
                   precision={0}
                 />
               </div>
-            </div>
-          )}
+            </section>
 
-          {/* Throughput Breakdown section */}
-          {(metrics.prompt_throughput_tps || metrics.generation_throughput_tps || metrics.output_length_mean) && (
-            <div className="panel p-6 mb-8">
-              <h2 className="font-sans text-[14px] font-medium tracking-mech text-ink-0 mb-4 pb-2 border-b border-line">Throughput Breakdown</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* F. COST */}
+            <section className="mb-8">
+              <SectionHeader index="F" label="Cost" />
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <MetricCard label="Hourly" value={hourly ?? undefined} unit="$" precision={2} />
                 <MetricCard
-                  label="Input Throughput"
-                  value={metrics.prompt_throughput_tps}
-                  unit="tok/s"
-                  precision={1}
+                  label="Per Request"
+                  value={perRequestCost ?? undefined}
+                  unit="$"
+                  precision={6}
                 />
                 <MetricCard
-                  label="Output Throughput"
-                  value={metrics.generation_throughput_tps}
-                  unit="tok/s"
-                  precision={1}
+                  label="Per 1M Tokens"
+                  value={per1MCost ?? undefined}
+                  unit="$"
+                  precision={2}
                 />
                 <MetricCard
-                  label="Avg Output Length"
-                  value={metrics.output_length_mean}
-                  unit="tokens"
-                  precision={0}
-                />
-                <MetricCard
-                  label="Running Requests Avg"
-                  value={metrics.running_requests_avg}
-                  unit=""
-                  precision={1}
+                  label="Total Spent"
+                  value={spent ?? undefined}
+                  unit="$"
+                  precision={2}
                 />
               </div>
-            </div>
-          )}
+            </section>
 
-          {/* Request-level latency chart (TTFT, E2E) */}
-          <div className="panel p-4">
-            <div className="flex items-baseline justify-between mb-4">
-              <h3 className="eyebrow">REQUEST LATENCY — PERCENTILES</h3>
-              <span className="caption">ms</span>
+            {/* Export buttons */}
+            <div className="mt-8 pt-6 hairline">
+              <div className="flex gap-4">
+                <a href={getExportReportUrl(run.id)} download className="btn btn-primary">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  Export Report
+                </a>
+                <a href={getExportManifestUrl(run.id)} download className="btn">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                    />
+                  </svg>
+                  Export K8s Manifest
+                </a>
+              </div>
+              <p className="mt-2 caption">
+                Download HTML report for sharing or K8s manifest to deploy this configuration
+              </p>
             </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={highLatencyBars} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid {...gridProps} stroke={chartTheme.grid} />
-                <XAxis dataKey="name" tickLine={false} axisLine={{ stroke: chartTheme.grid }} tick={axisStyle(chartTheme)} />
-                <YAxis tickLine={false} axisLine={false} tick={axisStyle(chartTheme)} width={44} />
-                <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
-                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 8 }} />
-                <Bar dataKey="p50" fill={ramp[0]} name="p50" />
-                <Bar dataKey="p90" fill={ramp[1]} name="p90" />
-                <Bar dataKey="p95" fill={ramp[2]} name="p95" />
-                <Bar dataKey="p99" fill={ramp[3]} name="p99" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Token-level latency chart (ITL, TPOT) */}
-          <div className="panel p-4 mt-4">
-            <div className="flex items-baseline justify-between mb-4">
-              <h3 className="eyebrow">TOKEN LATENCY — PERCENTILES</h3>
-              <span className="caption">ms</span>
-            </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={lowLatencyBars} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                <CartesianGrid {...gridProps} stroke={chartTheme.grid} />
-                <XAxis dataKey="name" tickLine={false} axisLine={{ stroke: chartTheme.grid }} tick={axisStyle(chartTheme)} />
-                <YAxis tickLine={false} axisLine={false} tick={axisStyle(chartTheme)} width={44} />
-                <Tooltip content={<ChartTooltip unit="ms" />} cursor={{ fill: "rgb(var(--ink-2) / 0.08)" }} />
-                <Legend content={<ChartLegend />} wrapperStyle={{ paddingBottom: 8 }} />
-                <Bar dataKey="p50" fill={ramp[0]} name="p50" />
-                <Bar dataKey="p90" fill={ramp[1]} name="p90" />
-                <Bar dataKey="p95" fill={ramp[2]} name="p95" />
-                <Bar dataKey="p99" fill={ramp[3]} name="p99" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Export buttons */}
-          <div className="mt-8 pt-6 hairline">
-            <div className="flex gap-4">
-              <a
-                href={getExportReportUrl(run.id)}
-                download
-                className="btn btn-primary"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Export Report
-              </a>
-              <a
-                href={getExportManifestUrl(run.id)}
-                download
-                className="btn"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-                Export K8s Manifest
-              </a>
-            </div>
-            <p className="mt-2 caption">
-              Download HTML report for sharing or K8s manifest to deploy this configuration
-            </p>
-          </div>
-        </>
-      )}
+          </>
+        )}
       </div>
     </>
   );

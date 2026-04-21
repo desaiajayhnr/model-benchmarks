@@ -19,6 +19,11 @@ import { listCatalog, listPricing } from "../api";
 import type { CatalogEntry, PricingTier, PricingRow } from "../types";
 import PricingToggle from "../components/PricingToggle";
 import {
+  hourlyRateFromMap,
+  costPerRequest as deriveCostPerRequest,
+  costPer1MTokens as deriveCostPer1MTokens,
+} from "../lib/cost";
+import {
   useChartTheme,
   seriesPalette,
   percentileRamp,
@@ -39,23 +44,6 @@ const AWS_REGIONS = [
   "ap-southeast-1",
   "ap-northeast-1",
 ];
-
-function getPrice(
-  pricingMap: Map<string, PricingRow>,
-  instance: string,
-  tier: PricingTier
-): number | null {
-  const row = pricingMap.get(instance);
-  if (!row) return null;
-  switch (tier) {
-    case "on_demand":
-      return row.on_demand_hourly_usd;
-    case "reserved_1yr":
-      return row.reserved_1yr_hourly_usd ?? null;
-    case "reserved_3yr":
-      return row.reserved_3yr_hourly_usd ?? null;
-  }
-}
 
 export default function Compare() {
   const [searchParams] = useSearchParams();
@@ -148,18 +136,12 @@ export default function Compare() {
 
   // Cost table.
   const costRows = entries.map((e) => {
-    const hourly = getPrice(pricingMap, e.instance_type_name, pricingTier);
-    const rps = e.requests_per_second;
-    const tps = e.throughput_aggregate_tps;
+    const hourly = hourlyRateFromMap(pricingMap, e.instance_type_name, pricingTier);
     return {
       label: `${e.model_hf_id.split("/").pop()} / ${e.instance_type_name}`,
       hourly,
-      costPerRequest:
-        hourly && rps && rps > 0 ? hourly / rps / 3600 : null,
-      costPer1MTokens:
-        hourly && tps && tps > 0
-          ? (hourly / tps / 3600) * 1_000_000
-          : null,
+      costPerRequest: deriveCostPerRequest(hourly, e.requests_per_second),
+      costPer1MTokens: deriveCostPer1MTokens(hourly, e.throughput_aggregate_tps),
     };
   });
 

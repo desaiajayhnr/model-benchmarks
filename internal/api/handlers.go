@@ -264,7 +264,18 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "run not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, run)
+	// Enrich with human-readable model + instance fields for the UI.
+	type runView struct {
+		*database.BenchmarkRun
+		ModelHfID        string `json:"model_hf_id,omitempty"`
+		InstanceTypeName string `json:"instance_type_name,omitempty"`
+	}
+	view := runView{BenchmarkRun: run}
+	if details, _ := s.repo.GetRunExportDetails(r.Context(), runID); details != nil {
+		view.ModelHfID = details.ModelHfID
+		view.InstanceTypeName = details.InstanceTypeName
+	}
+	writeJSON(w, http.StatusOK, view)
 }
 
 func (s *Server) handleGetMetrics(w http.ResponseWriter, r *http.Request) {

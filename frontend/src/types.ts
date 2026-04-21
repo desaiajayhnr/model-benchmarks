@@ -60,6 +60,12 @@ export interface BenchmarkRun {
   started_at?: string;
   completed_at?: string;
   created_at: string;
+  // Enrichments from the runs API — populated for display.
+  // model_hf_id will be the S3 URI for S3-only custom models (API stores the
+  // URI in this field when no HF id is available) — the UI should render it
+  // as-is regardless of origin.
+  model_hf_id?: string;
+  instance_type_name?: string;
 }
 
 export interface BenchmarkMetrics {
