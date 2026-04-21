@@ -40,3 +40,9 @@ variable "cluster_iam_role_name" {
   description = "Name of the EKS cluster IAM role. The Auto Mode load-balancing controller assumes this role; Cognito auth annotations require DescribeUserPoolClient + elasticloadbalancing:SetSubnets permissions on it."
   type        = string
 }
+
+variable "allowed_email_domains" {
+  description = "Domains allowed to self-sign-up (e.g. [\"amazon.com\"]). Empty list keeps the pool admin-provisioned only. When non-empty, a pre-signup Lambda trigger enforces the policy and auto-confirms matching users."
+  type        = list(string)
+  default     = []
+}

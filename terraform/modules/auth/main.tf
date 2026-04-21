@@ -1,6 +1,7 @@
 # Cognito User Pool — authoritative identity store.
 # Users are admin-created via the AWS CLI (see README). Passwords never live in
-# Terraform state.
+# Terraform state. When allowed_email_domains is non-empty, self-signup is
+# opened up but restricted to those domains by a pre-signup Lambda trigger.
 resource "aws_cognito_user_pool" "this" {
   name              = "${var.project_name}-users"
   mfa_configuration = var.mfa_configuration
@@ -18,7 +19,10 @@ resource "aws_cognito_user_pool" "this" {
   }
 
   admin_create_user_config {
-    allow_admin_create_user_only = true
+    # When an allowed_email_domains list is provided, self-signup is enabled
+    # (the pre-signup Lambda trigger enforces the domain policy). Otherwise
+    # only admins can create users via the CLI.
+    allow_admin_create_user_only = length(var.allowed_email_domains) == 0
   }
 
   account_recovery_setting {
@@ -32,6 +36,13 @@ resource "aws_cognito_user_pool" "this" {
     for_each = var.mfa_configuration == "OFF" ? [] : [1]
     content {
       enabled = true
+    }
+  }
+
+  dynamic "lambda_config" {
+    for_each = length(var.allowed_email_domains) > 0 ? [1] : []
+    content {
+      pre_sign_up = aws_lambda_function.pre_signup[0].arn
     }
   }
 
