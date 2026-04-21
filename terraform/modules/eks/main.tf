@@ -10,7 +10,15 @@ module "eks" {
 
   cluster_endpoint_public_access = true
 
-  enable_cluster_creator_admin_permissions = true
+  # Match how the live cluster was originally bootstrapped. Setting this is
+  # a create-time-only attribute; without this line the module defaults to
+  # null (AWS interprets as true) and forces replacement of the cluster.
+  bootstrap_self_managed_addons = false
+
+  # The IAM user that originally created the cluster (the "kubernetes" user)
+  # already has an access entry configured outside Terraform. Leave this
+  # false so TF doesn't try to create a duplicate access entry.
+  enable_cluster_creator_admin_permissions = false
 
   cluster_addons = {
     coredns = {

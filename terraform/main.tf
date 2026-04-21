@@ -170,6 +170,13 @@ resource "aws_ecr_repository" "loadgen" {
   tags                 = local.tags
 }
 
+resource "aws_ecr_repository" "tools" {
+  name                 = "${var.project_name}-tools"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+  tags                 = local.tags
+}
+
 # ---------- S3 Bucket for Benchmark Results ----------
 resource "aws_s3_bucket" "results" {
   bucket        = "${var.project_name}-results-${data.aws_caller_identity.current.account_id}"

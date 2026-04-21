@@ -24,6 +24,11 @@ module "vpc" {
   enable_nat_gateway = true
   single_nat_gateway = var.single_nat_gateway
 
+  # The default route table has no functional use (the private/public/intra
+  # RTs carry the real routes), and aws_default_route_table has a known
+  # import bug in the AWS provider for RTs with only a local route.
+  manage_default_route_table = false
+
   public_subnet_tags = {
     "kubernetes.io/role/elb" = 1
   }

@@ -16,6 +16,16 @@ module "karpenter" {
   tags = var.tags
 }
 
+resource "helm_release" "karpenter_crd" {
+  namespace  = "kube-system"
+  name       = "karpenter-crd"
+  repository = "oci://public.ecr.aws/karpenter"
+  chart      = "karpenter-crd"
+  version    = var.karpenter_version
+  wait       = true
+  timeout    = 300
+}
+
 resource "helm_release" "karpenter" {
   namespace        = "kube-system"
   name             = "karpenter"
@@ -35,7 +45,7 @@ resource "helm_release" "karpenter" {
     EOT
   ]
 
-  depends_on = [module.karpenter]
+  depends_on = [module.karpenter, helm_release.karpenter_crd]
 }
 
 # Wait for Karpenter to be ready before creating node classes
@@ -476,6 +486,12 @@ resource "kubectl_manifest" "dcgm_exporter" {
           containers:
             - name: dcgm-exporter
               image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.9-3.6.1-ubuntu22.04
+              # Use the image's bundled DCP-enabled counters CSV so we get
+              # DCGM_FI_PROF_SM_ACTIVE and DCGM_FI_PROF_PIPE_TENSOR_ACTIVE
+              # in addition to the default NVML counters. See PRD-22.
+              args:
+                - "-f"
+                - "/etc/dcgm-exporter/dcp-metrics-included.csv"
               ports:
                 - name: metrics
                   containerPort: 9400
