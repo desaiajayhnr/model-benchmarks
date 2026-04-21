@@ -15,6 +15,7 @@ module "auth" {
   cognito_domain_prefix   = var.cognito_domain_prefix
   mfa_configuration       = var.mfa_configuration
   session_timeout_seconds = var.session_timeout_seconds
+  allowed_email_domains   = var.allowed_email_domains
   cluster_iam_role_name   = module.eks.cluster_iam_role_name
 
   tags = local.tags
