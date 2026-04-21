@@ -63,12 +63,21 @@ export function seriesPalette(): string[] {
    Common axis / grid props for consistency
    ------------------------------------------------------------------ */
 
+// Font used inside charts. We intentionally don't use Geist Mono here —
+// at 10–11px SVG scale its narrow apertures read as noise. System sans
+// renders sharper at these sizes.
+export const chartFontFamily =
+  "ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif";
+
 export function axisStyle(theme: ReturnType<typeof useChartTheme>) {
+  // Recharts passes this to <text> tick elements. Stroke on text glyphs
+  // produces a fuzzy double-edge at small sizes in SVG — always use fill
+  // only and leave stroke transparent.
   return {
-    stroke: theme.axis,
-    fontFamily: "Geist Mono, ui-monospace, monospace",
-    fontSize: 10,
-    letterSpacing: "0.02em",
+    fill: theme.axis,
+    stroke: "none",
+    fontFamily: chartFontFamily,
+    fontSize: 11,
   };
 }
 

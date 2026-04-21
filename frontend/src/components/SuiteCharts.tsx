@@ -101,7 +101,7 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
       </button>
 
       {expanded && (
-        <div className="p-4 grid grid-cols-1 lg:grid-cols-2 gap-0 border-l border-t border-line">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-0">
           {/* QPS vs Latency */}
           <ChartPanel title="QPS → LATENCY" unit="ms">
             <ResponsiveContainer width="100%" height={280}>
@@ -116,7 +116,7 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                     value: "TARGET QPS",
                     position: "insideBottom",
                     offset: -18,
-                    style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
+                    style: { ...axis, fill: theme.axis, fontSize: 11 },
                   }}
                 />
                 <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
@@ -168,7 +168,7 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                     value: "TARGET QPS",
                     position: "insideBottom",
                     offset: -18,
-                    style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
+                    style: { ...axis, fill: theme.axis, fontSize: 11 },
                   }}
                 />
                 <YAxis tickLine={false} axisLine={false} tick={axis} width={44} />
@@ -203,7 +203,7 @@ export default function SuiteCharts({ results, definitions }: SuiteChartsProps) 
                     value: "THROUGHPUT (TOK/S)",
                     position: "insideBottom",
                     offset: -18,
-                    style: { ...axis, fill: theme.axis, fontSize: 9, letterSpacing: "0.08em" },
+                    style: { ...axis, fill: theme.axis, fontSize: 11 },
                   }}
                 />
                 <YAxis
