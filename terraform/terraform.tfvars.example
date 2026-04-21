@@ -44,3 +44,10 @@ auth_enabled = false
 # acm_certificate_arn   = "<ACM_CERTIFICATE_ARN>"
 # cognito_domain_prefix = "accelbench-auth"
 # mfa_configuration     = "OFF"
+
+# Optional: allow self-signup restricted to specific email domains.
+# Empty list (default) = admin-provisioned users only.
+# Non-empty = Cognito Hosted UI shows a "Sign up" link, and a pre-signup
+# Lambda trigger rejects any email that does NOT end in one of these domains.
+# Matching users are auto-confirmed (no confirmation email needed).
+# allowed_email_domains = ["amazon.com"]
