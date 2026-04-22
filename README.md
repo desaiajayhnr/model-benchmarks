@@ -84,7 +84,7 @@ Instance selection in the Run form pulls live pricing and filters by accelerator
 - [Helm](https://helm.sh/) >= 3.0
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) configured for your cluster
 - [Docker](https://www.docker.com/) for building images (BuildKit required — cache mounts are used)
-- A Docker Hub account with an access token (needed for the ECR pull-through cache that mirrors the vLLM image)
+- A Docker Hub account with an access token (needed for the ECR pull-through cache that mirrors the vLLM image; settable after install via the Configuration page)
 
 ## Deployment
 
@@ -92,13 +92,11 @@ Instance selection in the Run form pulls live pricing and filters by accelerator
 
 ```bash
 cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars — at minimum set dockerhub_username + dockerhub_access_token
-# so the ECR pull-through cache can hydrate the vLLM image on first pull.
-
 terraform init
 terraform apply
 ```
+
+`terraform.tfvars` is **optional**. The only tunable values are `dockerhub_username` + `dockerhub_access_token` for the ECR pull-through cache. Leave them blank at `apply` time and rotate via the Configuration page (Credentials card) after install — that's the recommended path. Alternatively, `cp terraform.tfvars.example terraform.tfvars` and set them up front.
 
 The Terraform config creates:
 
@@ -192,7 +190,7 @@ The migration Job applies every SQL file in `db/migrations/` on startup. Migrati
 
 Once the cluster is up, navigate to your ingress host and open **Configuration** (left nav, gear icon). This is where operators set up the runtime knobs that aren't baked into the Helm chart:
 
-**Credentials** — save an HF token once (for gated models like `meta-llama/*`) and a Docker Hub access token (the pull-through cache needs this to hydrate new images). Tokens go to AWS Secrets Manager (`accelbench/config/hf-token`, `ecr-pullthroughcache/dockerhub`) and auto-inject into every benchmark run, model-cache job, and catalog seed. Values are never shown after save.
+**Credentials** — save an HF token once (for gated models like `meta-llama/*`) and a Docker Hub access token (the pull-through cache needs this to hydrate new images). If you skipped the Docker Hub tfvars at install time, set it here first — the secret entry exists but is empty until someone writes to it. Tokens go to AWS Secrets Manager (`accelbench/config/hf-token`, `ecr-pullthroughcache/dockerhub`) and auto-inject into every benchmark run, model-cache job, and catalog seed. Values are never shown after save.
 
 **Seeding Matrix** — edit the models × instance types the "Seed Benchmarks" button explores. Models use a HuggingFace autocomplete; instance types are a dropdown populated from `/api/v1/instance-types`. Presence in the list = enabled.
 
