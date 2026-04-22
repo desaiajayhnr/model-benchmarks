@@ -4,6 +4,7 @@ import {
   putHFToken,
   deleteHFToken,
   putDockerHubToken,
+  deleteDockerHubToken,
   getCatalogMatrix,
   putCatalogMatrix,
   listScenarioOverrides,
@@ -301,6 +302,19 @@ function CredentialsCard({
     }
   }
 
+  async function handleClearDockerHub() {
+    if (!confirm("Delete the platform Docker Hub token? The ECR pull-through cache will fail to hydrate new images until a new token is provided.")) {
+      return;
+    }
+    setClearing(true);
+    try {
+      await deleteDockerHubToken();
+      onChanged();
+    } finally {
+      setClearing(false);
+    }
+  }
+
   return (
     <CollapsibleSection index="A" label="Credentials" defaultOpen>
       <div className="panel px-5">
@@ -314,6 +328,7 @@ function CredentialsCard({
           label="Docker Hub token"
           meta={creds?.dockerhub_token}
           onRotate={() => setModal({ kind: "dockerhub" })}
+          onDelete={clearing ? undefined : handleClearDockerHub}
         />
       </div>
       <p className="meta mt-3 max-w-xl">
@@ -886,9 +901,9 @@ function NodePoolReservationsBlock({
       </div>
 
       <div className="caption mb-3">
-        <span className="text-ink-2">families:</span> {pool.instance_families.join(", ") || "—"}
+        <span className="text-ink-2">families:</span> {(pool.instance_families ?? []).join(", ") || "—"}
         <span className="mx-2 text-ink-2">·</span>
-        <span className="text-ink-2">AZs:</span> {pool.subnet_azs.join(", ") || "—"}
+        <span className="text-ink-2">AZs:</span> {(pool.subnet_azs ?? []).join(", ") || "—"}
         {!pool.capacity_type_includes_reserved && (
           <>
             <span className="mx-2 text-ink-2">·</span>
@@ -920,7 +935,7 @@ function NodePoolReservationsBlock({
       )}
       {formError && <div className="caption text-danger mb-3">{formError}</div>}
 
-      {pool.reservations.length === 0 ? (
+      {!pool.reservations || pool.reservations.length === 0 ? (
         <p className="caption">No reservations attached.</p>
       ) : (
         <div className="space-y-2">

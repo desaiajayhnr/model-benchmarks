@@ -322,6 +322,11 @@ export async function putDockerHubToken(username: string, access_token: string):
   }
 }
 
+export async function deleteDockerHubToken(): Promise<void> {
+  const res = await fetch(`${BASE}/config/credentials/dockerhub-token`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`DELETE dockerhub-token failed: ${res.status}`);
+}
+
 // PRD-32: catalog matrix editor
 export async function getCatalogMatrix(): Promise<CatalogMatrixPayload> {
   return fetchJSON<CatalogMatrixPayload>(`${BASE}/config/catalog-matrix`);

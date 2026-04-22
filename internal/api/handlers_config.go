@@ -23,6 +23,7 @@ type SecretsStore interface {
 	PutHFToken(ctx context.Context, token string) error
 	DeleteHFToken(ctx context.Context) error
 	PutDockerHub(ctx context.Context, username, accessToken string) error
+	DeleteDockerHub(ctx context.Context) error
 }
 
 // --- GET /api/config/credentials -------------------------------------------
@@ -99,6 +100,19 @@ func (s *Server) handleDeleteHFToken(w http.ResponseWriter, r *http.Request) {
 type putDockerHubRequest struct {
 	Username    string `json:"username"`
 	AccessToken string `json:"access_token"`
+}
+
+func (s *Server) handleDeleteDockerHubToken(w http.ResponseWriter, r *http.Request) {
+	if s.secrets == nil {
+		writeError(w, http.StatusInternalServerError, "secrets manager not configured")
+		return
+	}
+	if err := s.secrets.DeleteDockerHub(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete dockerhub-token: "+err.Error())
+		return
+	}
+	s.audit(r.Context(), "DELETE /api/v1/config/credentials/dockerhub-token", "cleared")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handlePutDockerHubToken(w http.ResponseWriter, r *http.Request) {

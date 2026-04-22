@@ -146,7 +146,11 @@ func (s *Server) handleListReservations(w http.ResponseWriter, r *http.Request) 
 
 	out := make([]nodePoolReservations, 0, len(reservationNodePools))
 	for _, np := range reservationNodePools {
-		entry := nodePoolReservations{NodeClass: np.NodeClass, NodePool: np.NodePool}
+		entry := nodePoolReservations{
+			NodeClass:    np.NodeClass,
+			NodePool:     np.NodePool,
+			Reservations: []reservationSummary{}, // avoid null in JSON when empty
+		}
 
 		nc, err := s.dynClient.Resource(gvrEC2NodeClass).Get(ctx, np.NodeClass, metav1.GetOptions{})
 		if err != nil {
