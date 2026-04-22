@@ -58,3 +58,14 @@ variable "dockerhub_access_token" {
   sensitive   = true
   default     = ""
 }
+
+variable "manage_accelbench_namespace" {
+  description = <<-EOT
+    Whether Terraform should create the `accelbench` namespace and DATABASE_URL
+    secret. Default true (new installs). Set to false on an existing cluster
+    where the namespace was created manually, then `terraform import` the
+    resources instead to avoid re-creation conflicts.
+  EOT
+  type        = bool
+  default     = true
+}

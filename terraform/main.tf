@@ -52,6 +52,17 @@ provider "kubectl" {
   }
 }
 
+provider "kubernetes" {
+  host                   = module.eks.cluster_endpoint
+  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", local.cluster_name]
+  }
+}
+
 # ---------- VPC ----------
 module "vpc" {
   source = "./modules/vpc"
@@ -98,6 +109,65 @@ module "aurora" {
   max_capacity               = var.aurora_max_capacity
 
   tags = local.tags
+}
+
+# ---------- Kubernetes namespace + DB secret (Helm-owned) ----------
+# Creates the accelbench namespace with Helm ownership metadata AND the
+# DATABASE_URL secret the API + migration jobs read at runtime. Reads the
+# live Aurora password from Secrets Manager (populated by the RDS-managed
+# master user secret) and URL-encodes it before building the Postgres URI.
+#
+# If Aurora ever rotates the password, run `terraform apply` to refresh.
+
+data "aws_secretsmanager_secret_version" "aurora_master" {
+  secret_id = module.aurora.cluster_master_user_secret[0].secret_arn
+}
+
+locals {
+  aurora_creds    = jsondecode(data.aws_secretsmanager_secret_version.aurora_master.secret_string)
+  aurora_password = local.aurora_creds.password
+  aurora_username = local.aurora_creds.username
+  # urlencode() percent-encodes every char except the RFC 3986 unreserved
+  # set, which matches what we need for the password in a Postgres URI.
+  database_url = format(
+    "postgres://%s:%s@%s:%d/accelbench?sslmode=require",
+    local.aurora_username,
+    urlencode(local.aurora_password),
+    module.aurora.cluster_endpoint,
+    module.aurora.cluster_port,
+  )
+}
+
+resource "kubernetes_namespace" "accelbench" {
+  count = var.manage_accelbench_namespace ? 1 : 0
+
+  metadata {
+    name = "accelbench"
+    labels = {
+      "app.kubernetes.io/managed-by" = "Helm"
+    }
+    annotations = {
+      "meta.helm.sh/release-name"      = "accelbench"
+      "meta.helm.sh/release-namespace" = "accelbench"
+    }
+  }
+
+  depends_on = [module.eks]
+}
+
+resource "kubernetes_secret" "accelbench_db" {
+  count = var.manage_accelbench_namespace ? 1 : 0
+
+  metadata {
+    name      = "accelbench-db"
+    namespace = kubernetes_namespace.accelbench[0].metadata[0].name
+  }
+
+  data = {
+    DATABASE_URL = local.database_url
+  }
+
+  type = "Opaque"
 }
 
 # ---------- API Pod Identity (pricing:GetProducts for CronJob) ----------

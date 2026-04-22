@@ -136,26 +136,11 @@ done
 
 ### 3. Database secret
 
-The Aurora master password is in AWS Secrets Manager. Convert it into a Kubernetes secret before installing Helm:
+Terraform creates the `accelbench` namespace and the `accelbench-db` Kubernetes secret (with a URL-encoded `DATABASE_URL` built from the Aurora master user secret) automatically as part of `terraform apply`. No manual steps.
 
-```bash
-SECRET_ARN=$(cd terraform && terraform output -json aurora_master_user_secret | jq -r '.[0].secret_arn')
-DB_CREDS=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --query SecretString --output text)
-DB_USER=$(echo "$DB_CREDS" | jq -r '.username')
-DB_PASS=$(echo "$DB_CREDS" | jq -r '.password')
-DB_HOST=$(cd terraform && terraform output -raw aurora_cluster_endpoint)
-DB_PASS_ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${DB_PASS}', safe=''))")
+If you ever change the Aurora password out of band (RDS-managed rotation, manual reset), re-run `terraform apply` to refresh the Kubernetes secret.
 
-kubectl create namespace accelbench
-kubectl label namespace accelbench app.kubernetes.io/managed-by=Helm
-kubectl annotate namespace accelbench \
-  meta.helm.sh/release-name=accelbench \
-  meta.helm.sh/release-namespace=accelbench
-
-kubectl create secret generic accelbench-db \
-  --namespace accelbench \
-  --from-literal=DATABASE_URL="postgres://${DB_USER}:${DB_PASS_ENCODED}@${DB_HOST}:5432/accelbench?sslmode=require"
-```
+On an **existing cluster** where the namespace was created manually (pre-this change), set `-var manage_accelbench_namespace=false` to avoid conflicts, or `terraform import kubernetes_namespace.accelbench[0] accelbench && terraform import kubernetes_secret.accelbench_db[0] accelbench/accelbench-db` to take ownership.
 
 ### 4. Helm install
 
