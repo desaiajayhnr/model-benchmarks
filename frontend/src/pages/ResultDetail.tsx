@@ -176,10 +176,7 @@ export default function ResultDetail() {
         />
 
         {runningCaption && (
-          <p className="mb-6 meta text-info flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-signal animate-pulse_signal" />
-            {runningCaption}
-          </p>
+          <p className="mb-6 meta text-info">{runningCaption}</p>
         )}
 
         {run.status === "failed" && run.error_message && (
