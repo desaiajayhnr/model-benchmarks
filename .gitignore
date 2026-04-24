@@ -49,3 +49,6 @@ Thumbs.db
 
 # PRDs (internal design docs)
 PRD*.md
+
+# Claude Code project guide (personal)
+CLAUDE.md
