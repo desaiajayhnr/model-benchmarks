@@ -114,8 +114,10 @@ export default function Estimate() {
         </p>
       </div>
 
-      {/* Input Section */}
-      <div className="panel p-4 mb-6">
+      {/* Input Section — styled to match the "Benchmark Type" block on the
+          Run page: inset panel, single group-level eyebrow at the top. */}
+      <div className="panel-inset p-4 mb-6">
+        <label className="eyebrow block mb-3">Configure Estimate</label>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
             <label className="eyebrow block mb-1.5">
